@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JarvisOS</string>
+    <string name="tap_to_speak">Tap to speak</string>
+    <string name="listening">Listening…</string>
+    <string name="connecting">Connecting to Jarvis…</string>
+    <string name="settings_server_ip">Server IP</string>
+    <string name="settings_device_name">Device Name</string>
+    <string name="settings_profile">Device Profile</string>
+    <string name="save_to_notebook">Save to Notebook</string>
+    <string name="notebook">Notebook</string>
+    <string name="no_match_error">I didn\'t catch that, Sir.</string>
+</resources>

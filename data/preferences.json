@@ -1,0 +1,18 @@
+{
+  "city": "Minneapolis,US",
+  "budget_monthly": 800,
+  "dietary_restrictions": [],
+  "preferred_stores": [
+    "aldi",
+    "walmart"
+  ],
+  "notification_level": "important",
+  "brief_include_weather": true,
+  "personality_enabled": true,
+  "personality_mode": "professional",
+  "address_name": "Sir",
+  "tts_voice": "en-GB-RyanNeural",
+  "tts_rate": "-5%",
+  "tts_pitch": "-10Hz",
+  "brief_voice_enabled": true
+}

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>J.A.R.V.I.S.</title>
+  <link rel="stylesheet" href="/static/jarvis.css">
+</head>
+<body>
+
+<header>
+  <h1>J.A.R.V.I.S.</h1>
+  <span class="subtitle">Just A Rather Very Intelligent System</span>
+</header>
+
+<div class="status-bar">
+  <span><span class="dot" id="llm-dot"></span>LLM: <span id="llm-status">checking...</span></span>
+  <span>Adapters: <span id="adapter-count">—</span></span>
+  <span id="last-updated"></span>
+</div>
+
+<main>
+
+  <!-- System Status -->
+  <section class="card" id="status-panel">
+    <h2>System Status</h2>
+    <div id="adapter-grid"><span class="loading">Loading adapters...</span></div>
+  </section>
+
+  <!-- Morning Brief -->
+  <section class="card" id="brief-panel">
+    <h2>Morning Brief</h2>
+    <div id="brief-text" class="loading">Click "Morning Brief" to generate.</div>
+  </section>
+
+  <!-- Quick Actions -->
+  <section class="card" id="actions-panel">
+    <h2>Quick Actions</h2>
+    <button class="action-btn" onclick="requestBrief()">&#127749; Morning Brief</button>
+    <button class="action-btn" onclick="sendQuick('Give me a market update from the investor')">&#128200; Market Update</button>
+    <button class="action-btn" onclick="sendQuick('Check my groceries and pantry status')">&#128722; Check Groceries</button>
+    <button class="action-btn" onclick="sendQuick('Show me the security status and any pending approvals')">&#128274; Security Status</button>
+    <button class="action-btn" onclick="sendQuick('How am I doing overall? Give me a full status report')">&#127381; Full Status Report</button>
+  </section>
+
+  <!-- Chat -->
+  <section class="card tall" id="chat-panel">
+    <h2>Ask Jarvis</h2>
+    <div id="chat-output"></div>
+    <div class="chat-input">
+      <input type="text" id="chat-msg" placeholder="Ask Jarvis anything..."
+             onkeydown="if(event.key==='Enter') sendChat()">
+      <button onclick="sendChat()">Send</button>
+    </div>
+  </section>
+
+  <!-- Preferences -->
+  <section class="card" id="prefs-panel">
+    <h2>Preferences <small id="prefs-saved-msg" style="color:var(--text-dim);font-size:10px;margin-left:8px"></small></h2>
+    <div id="prefs-form">
+      <label>City <input id="pref-city" type="text" placeholder="Minneapolis,US"></label>
+      <label>Monthly Budget ($) <input id="pref-budget" type="number" min="0" step="10"></label>
+      <label>Notification Level
+        <select id="pref-notif-level">
+          <option value="all">all</option>
+          <option value="important">important</option>
+          <option value="critical">critical</option>
+        </select>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px">
+        <input id="pref-weather-brief" type="checkbox"> Include weather in brief
+      </label>
+      <button class="action-btn" onclick="savePreferences()">Save Preferences</button>
+    </div>
+  </section>
+
+  <!-- Decision Feed -->
+  <section class="card wide" id="decisions-panel">
+    <h2>Decision Feed <small style="color:var(--text-dim);font-size:10px;margin-left:8px">last 20 agent decisions</small></h2>
+    <div id="decisions-table"><span class="loading">Loading...</span></div>
+  </section>
+
+</main>
+
+<script>
+const API = '';  // same origin
+
+// ── Status polling ────────────────────────────────────────────────────────────
+async function refreshStatus() {
+  try {
+    const r = await fetch(`${API}/api/status`);
+    const d = await r.json();
+    const dot = document.getElementById('llm-dot');
+    document.getElementById('llm-status').textContent = d.llm_available ? 'online' : 'offline';
+    dot.className = 'dot ' + (d.llm_available ? 'online' : 'offline');
+    document.getElementById('adapter-count').textContent = d.adapter_count;
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('llm-status').textContent = 'unreachable';
+    document.getElementById('llm-dot').className = 'dot offline';
+  }
+}
+
+// ── Adapters ──────────────────────────────────────────────────────────────────
+const LIVE_ADAPTERS = new Set([
+  'grocery','investor','homeops_grocery','summerpuppy','devteam','receipt_ingest'
+]);
+
+async function refreshAdapters() {
+  try {
+    const r = await fetch(`${API}/api/adapters`);
+    const d = await r.json();
+    const grid = document.getElementById('adapter-grid');
+    grid.innerHTML = d.adapters.map(a => {
+      const live = LIVE_ADAPTERS.has(a.name);
+      return `<div class="adapter-chip" title="${a.description}">
+        <div class="dot ${live ? 'live' : 'stub'}"></div>
+        ${a.name}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('adapter-grid').innerHTML =
+      '<span style="color:var(--error)">Failed to load adapters</span>';
+  }
+}
+
+// ── Morning Brief ─────────────────────────────────────────────────────────────
+async function requestBrief() {
+  const el = document.getElementById('brief-text');
+  el.className = 'loading';
+  el.textContent = 'Generating brief... (this may take 30-60s)';
+  try {
+    const r = await fetch(`${API}/api/brief`);
+    const d = await r.json();
+    el.className = '';
+    el.textContent = d.text || '(no brief text returned)';
+  } catch(e) {
+    el.className = '';
+    el.style.color = 'var(--error)';
+    el.textContent = 'Failed to generate brief: ' + e;
+  }
+}
+
+// ── Decision Feed ─────────────────────────────────────────────────────────────
+async function refreshDecisions() {
+  try {
+    const r = await fetch(`${API}/api/decisions/recent?n=20`);
+    const d = await r.json();
+    const container = document.getElementById('decisions-table');
+    if (!d.decisions.length) {
+      container.innerHTML = '<span style="color:var(--text-dim)">No decisions logged yet.</span>';
+      return;
+    }
+    container.innerHTML = `<table>
+      <thead><tr>
+        <th>Time</th><th>Agent</th><th>Capability</th><th>Decision</th><th>Outcome</th><th>ms</th>
+      </tr></thead>
+      <tbody>
+        ${d.decisions.slice().reverse().map(e => `<tr>
+          <td>${(e.timestamp||'').slice(11,19)}</td>
+          <td>${esc(e.agent)}</td>
+          <td>${esc(e.capability)}</td>
+          <td>${esc((e.decision||'').slice(0,80))}</td>
+          <td class="outcome-${e.outcome}">${esc(e.outcome)}</td>
+          <td>${e.duration_ms != null ? e.duration_ms : '—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  } catch(err) {
+    document.getElementById('decisions-table').innerHTML =
+      '<span style="color:var(--error)">Failed to load decisions</span>';
+  }
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+function appendChat(role, text) {
+  const out = document.getElementById('chat-output');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  div.textContent = text;
+  out.appendChild(div);
+  out.scrollTop = out.scrollHeight;
+  return div;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-msg');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  appendChat('user', msg);
+  const thinking = appendChat('assistant loading', '...');
+  try {
+    // Use SSE stream for live status updates
+    const url = `${API}/api/chat/stream?message=${encodeURIComponent(msg)}`;
+    const es = new EventSource(url);
+    let final = false;
+    es.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === 'status') {
+        thinking.textContent = data.text;
+      } else if (data.type === 'result') {
+        thinking.className = 'chat-msg assistant';
+        thinking.textContent = data.text;
+        final = true;
+      } else if (data.type === 'error') {
+        thinking.className = 'chat-msg error';
+        thinking.textContent = data.text;
+        final = true;
+      } else if (data.type === 'done') {
+        es.close();
+        if (!final) { thinking.remove(); }
+        refreshDecisions();
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      if (!final) {
+        thinking.className = 'chat-msg error';
+        thinking.textContent = 'Connection error';
+      }
+    };
+  } catch(err) {
+    thinking.className = 'chat-msg error';
+    thinking.textContent = 'Error: ' + err;
+  }
+}
+
+function sendQuick(msg) {
+  document.getElementById('chat-msg').value = msg;
+  sendChat();
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Preferences ───────────────────────────────────────────────────────────────
+async function loadPreferences() {
+  try {
+    const r = await fetch(`${API}/api/preferences`);
+    const d = await r.json();
+    document.getElementById('pref-city').value = d.city || '';
+    document.getElementById('pref-budget').value = d.budget_monthly ?? 800;
+    document.getElementById('pref-notif-level').value = d.notification_level || 'important';
+    document.getElementById('pref-weather-brief').checked = d.brief_include_weather !== false;
+  } catch(e) {
+    console.warn('Could not load preferences', e);
+  }
+}
+
+async function savePreferences() {
+  const updates = {
+    city: document.getElementById('pref-city').value.trim(),
+    budget_monthly: parseFloat(document.getElementById('pref-budget').value) || 800,
+    notification_level: document.getElementById('pref-notif-level').value,
+    brief_include_weather: document.getElementById('pref-weather-brief').checked,
+  };
+  try {
+    const r = await fetch(`${API}/api/preferences`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(updates),
+    });
+    if (r.ok) {
+      const msg = document.getElementById('prefs-saved-msg');
+      msg.textContent = '✓ Saved';
+      setTimeout(() => { msg.textContent = ''; }, 2000);
+    }
+  } catch(e) {
+    console.warn('Could not save preferences', e);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async function init() {
+  await Promise.all([refreshStatus(), refreshAdapters(), refreshDecisions(), loadPreferences()]);
+  setInterval(refreshStatus,   30000);
+  setInterval(refreshAdapters, 60000);
+  setInterval(refreshDecisions, 15000);
+})();
+</script>
+</body>
+</html>

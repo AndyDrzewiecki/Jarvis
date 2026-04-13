@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="arc_reactor_bg">#0a0a1a</color>
+    <color name="arc_reactor_glow">#00bfff</color>
+    <color name="arc_reactor_ring">#1a3a5c</color>
+    <color name="arc_reactor_pulse">#4dc8ff</color>
+    <color name="text_primary">#e8f4fd</color>
+    <color name="text_secondary">#7ab8d4</color>
+    <color name="status_ok">#00ff88</color>
+    <color name="status_warn">#ffaa00</color>
+    <color name="card_surface">#111827</color>
+    <color name="card_border">#1e3a5f</color>
+</resources>
