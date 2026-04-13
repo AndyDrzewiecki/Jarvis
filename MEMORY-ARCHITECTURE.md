@@ -868,3 +868,723 @@ RETIRED:
 | 8th | #5 Procedural Memory | Requires enough episodes to detect patterns (~30 days of data) |
 | 9th | #9 Shared Blackboard | Requires multiple running specialists |
 | 10th | #10 Introspection API | Polish layer — most valuable once the system has rich memory to inspect |
+
+---
+
+## Addendum: Scaling the Memory Architecture for 7 Knowledge Engines
+
+**Date:** 2026-04-13 | **Status:** Design Expansion
+
+The original 10 recommendations above were designed for household-interaction-scale memory — conversations, decisions, preferences. The expanded Jarvis vision introduces **7 continuous knowledge accumulation engines** that radically change the volume, variety, and velocity of data flowing through the memory system. This addendum identifies the architectural gaps and provides the expanded schemas, patterns, and strategies needed to support the full vision.
+
+### The 7 Knowledge Engines
+
+| # | Engine | Scope | Key Sources | Est. Annual Volume |
+|---|--------|-------|-------------|-------------------|
+| 1 | Financial & Economic Intelligence | Markets, macro indicators, tax, company fundamentals | FRED, SEC EDGAR, BLS, Yahoo Finance, Treasury | ~5M structured records/yr |
+| 2 | Geopolitical & World Events | Conflicts, policy, trade, sanctions, elections | GDELT, Congress.gov, UN, Reuters RSS, think tanks | ~2M events/yr |
+| 3 | AI/ML Research Sentinel | Papers, repos, models, techniques | arXiv, Semantic Scholar, GitHub, HuggingFace, Papers With Code | ~500K items/yr |
+| 4 | Legal & Regulatory | Tax law, zoning, employment, consumer protection, insurance | IRS, Federal Register, state legislatures, CMS | ~200K documents/yr |
+| 5 | Health & Wellness | Nutrition science, drug interactions, local health data | PubMed, FDA OpenFDA, pollen/AQI APIs, CMS Compare | ~300K records/yr |
+| 6 | Local Intelligence | Real estate, schools, crime, infrastructure, utility rates, events | Zillow, county assessor, school DOE, city council, Eventbrite | ~100K records/yr |
+| 7 | Family & Life Quality | Vacations, activities, bonding, parenting, child development | TripAdvisor, AllTrails, local parks/rec, school calendars, dev research | ~50K records/yr |
+
+**Total estimated volume: ~8M+ new records per year, growing as engines mature.**
+
+---
+
+### Gap 1: Dual Ingestion — Interaction Memory vs. World Knowledge
+
+The current architecture assumes all knowledge enters through conversations (Andy talks → working memory → episodic → semantic). The 7 engines ingest world knowledge through API scrapes, RSS feeds, and file downloads — no conversation involved.
+
+**Solution: Two ingestion paths into the same MemoryBus.**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         MEMORY BUS                                │
+│                    (Unified I/O — unchanged)                      │
+│                                                                   │
+│   INTERACTION PATH                    INGESTION PATH              │
+│   (from conversations)                (from engines)              │
+│                                                                   │
+│   User message                        API scrape result           │
+│      ↓                                   ↓                        │
+│   Working Memory (Tier 1)            IngestionBuffer              │
+│      ↓                                   ↓                        │
+│   Episodic Memory (Tier 2)           Evaluation + Scoring         │
+│      ↓ (consolidation)                   ↓                        │
+│   Semantic Memory (Tier 3) ←──── World Knowledge Store            │
+│                                                                   │
+│   Both paths get:                                                 │
+│   ✓ Provenance chain                                             │
+│   ✓ Zettelkasten linking                                         │
+│   ✓ Significance scoring                                         │
+│   ✓ Attention gate eligibility                                   │
+│   ✓ Training-readiness tagging                                   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+```python
+class IngestionBuffer:
+    """
+    Entry point for non-conversational world knowledge.
+    Engines write here; the buffer evaluates, deduplicates,
+    and routes to the appropriate stores.
+    """
+
+    def ingest(self, engine: str, items: list[RawItem]) -> IngestionReport:
+        """
+        Batch ingest from an engine's gather cycle.
+        Each item goes through:
+        1. Deduplication (exact + semantic similarity check)
+        2. Quality scoring (source reliability, data completeness)
+        3. Relevance scoring (how useful to the household)
+        4. Schema validation (does it fit the domain tables)
+        5. Storage routing (hot SQLite, warm archive, or ChromaDB)
+        6. Provenance recording
+        7. Zettelkasten link discovery
+        """
+        report = IngestionReport(engine=engine, total=len(items))
+
+        for item in items:
+            # Dedup check
+            existing = self._find_duplicate(item)
+            if existing:
+                if item.timestamp > existing.timestamp:
+                    self._supersede(existing, item)
+                    report.updated += 1
+                else:
+                    report.skipped += 1
+                continue
+
+            # Score and route
+            quality = self._score_quality(item)
+            relevance = self._score_relevance(item)
+
+            if quality < 0.3 or relevance < 0.2:
+                report.rejected += 1
+                continue
+
+            # Store with full provenance
+            fact_id = self.memory_bus.store_world_knowledge(
+                engine=engine,
+                content=item.content,
+                structured_data=item.structured,
+                quality=quality,
+                relevance=relevance,
+                source_url=item.source_url,
+                raw_hash=item.content_hash,
+            )
+
+            # Discover links to existing knowledge
+            self._discover_links(fact_id, item)
+            report.ingested += 1
+
+        return report
+```
+
+**New MemoryBus method:**
+
+```python
+# Added to MemoryBus class
+def store_world_knowledge(self, engine: str, content: str,
+                          structured_data: dict = None,
+                          quality: float = 0.8,
+                          relevance: float = 0.8,
+                          **kwargs) -> str:
+    """
+    Store world knowledge from an engine (not from conversation).
+    Goes directly to Tier 3 semantic + domain-specific structured tables.
+    Skips Tier 1 (working) and Tier 2 (episodic) entirely.
+    """
+    # Write to semantic store (ChromaDB + knowledge_notes)
+    fact_id = self.semantic.add(
+        domain=engine,
+        content=content,
+        confidence=quality * relevance,
+        source_type="engine_ingestion",
+        **kwargs
+    )
+
+    # Write to domain-specific structured tables if applicable
+    if structured_data:
+        self._store_structured(engine, fact_id, structured_data)
+
+    # Full provenance
+    self._record_provenance(fact_id, "created",
+                           source_type="engine_ingestion",
+                           agent=engine, **kwargs)
+
+    self._emit("world_knowledge_stored",
+               fact_id=fact_id, engine=engine)
+    return fact_id
+```
+
+---
+
+### Gap 2: Tiered Storage for Million-Scale Data
+
+**Problem:** SQLite handles ~10M rows well. Beyond that, you need a strategy. Over 3 years, the 7 engines could accumulate 25M+ records. ChromaDB struggles past ~1M vectors.
+
+**Solution: Hot / Warm / Cold storage tiers with automatic lifecycle management.**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TIERED STORAGE STRATEGY                       │
+│                                                                  │
+│  HOT (< 90 days)              WARM (90d - 2yr)                  │
+│  ┌────────────────────┐       ┌────────────────────┐            │
+│  │  facts.db (SQLite)  │       │  archive.db (SQLite)│            │
+│  │  WAL mode, in-mem   │       │  Indexed, on-disk   │            │
+│  │  cache, < 5ms       │       │  < 50ms queries     │            │
+│  │  ~500K-2M rows      │       │  ~5-10M rows        │            │
+│  └────────────────────┘       └────────────────────┘            │
+│                                                                  │
+│  COLD (> 2 years)             VECTORS                            │
+│  ┌────────────────────┐       ┌────────────────────┐            │
+│  │  Parquet files      │       │  Domain-sharded     │            │
+│  │  via DuckDB         │       │  LanceDB / ChromaDB │            │
+│  │  Columnar, compress │       │  Per-engine shards   │            │
+│  │  Analytical queries │       │  ~1M vectors each    │            │
+│  │  Great for training │       │  Total capacity:     │            │
+│  │  data export        │       │  7M+ vectors         │            │
+│  └────────────────────┘       └────────────────────┘            │
+│                                                                  │
+│  LIFECYCLE MANAGER (runs weekly)                                 │
+│  - Move 90-day-old hot → warm                                    │
+│  - Move 2-year-old warm → cold (Parquet export)                  │
+│  - Compact warm indexes                                          │
+│  - Rebalance vector shards                                       │
+│  - Report storage metrics                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```python
+class StorageLifecycleManager:
+    """Weekly job that manages data tiering and compaction."""
+
+    def run(self) -> LifecycleReport:
+        # 1. Hot → Warm migration
+        hot_cutoff = datetime.now() - timedelta(days=90)
+        migrated = self._migrate_to_warm(before=hot_cutoff)
+
+        # 2. Warm → Cold archival (Parquet export)
+        warm_cutoff = datetime.now() - timedelta(days=730)
+        archived = self._archive_to_parquet(before=warm_cutoff)
+
+        # 3. Compact warm indexes
+        self._compact_warm_indexes()
+
+        # 4. Vector shard rebalancing
+        for engine in self.engines:
+            shard = self.vector_store.get_shard(engine)
+            if shard.count > 1_000_000:
+                self._split_shard(shard)
+
+        # 5. Storage metrics
+        return LifecycleReport(
+            hot_rows=self._count_hot(),
+            warm_rows=self._count_warm(),
+            cold_files=self._count_parquet_files(),
+            vector_count=self._total_vectors(),
+            total_disk_gb=self._disk_usage(),
+        )
+```
+
+**Domain-specific structured tables (hot tier):**
+
+```sql
+-- ═══ ENGINE 1: Financial & Economic Intelligence ═══
+
+CREATE TABLE economic_indicators (
+    id              TEXT PRIMARY KEY,
+    series_id       TEXT NOT NULL,       -- FRED series (e.g., 'GDP', 'UNRATE', 'CPIAUCSL')
+    value           REAL NOT NULL,
+    period          TEXT NOT NULL,       -- '2026-Q1', '2026-04', '2026-04-13'
+    frequency       TEXT NOT NULL,       -- 'daily', 'weekly', 'monthly', 'quarterly'
+    source          TEXT NOT NULL,       -- 'fred', 'bls', 'treasury'
+    retrieved_at    TEXT NOT NULL,
+    revised         INTEGER DEFAULT 0,  -- 1 if this is a revision of prior value
+    prior_value     REAL                -- what the old value was before revision
+);
+
+CREATE TABLE market_data (
+    id              TEXT PRIMARY KEY,
+    symbol          TEXT NOT NULL,
+    date            TEXT NOT NULL,
+    open            REAL, high REAL, low REAL, close REAL,
+    volume          INTEGER,
+    adjusted_close  REAL,
+    source          TEXT NOT NULL       -- 'yahoo', 'alphavantage'
+);
+
+CREATE TABLE sec_filings (
+    id              TEXT PRIMARY KEY,
+    cik             TEXT NOT NULL,       -- company CIK
+    company_name    TEXT NOT NULL,
+    form_type       TEXT NOT NULL,       -- '10-K', '10-Q', '8-K', 'DEF 14A'
+    filed_date      TEXT NOT NULL,
+    accepted_date   TEXT NOT NULL,
+    document_url    TEXT NOT NULL,
+    summary         TEXT,               -- LLM-generated summary
+    key_metrics     TEXT,               -- JSON: extracted financial highlights
+    sentiment       REAL,               -- LLM sentiment score
+    relevance       REAL                -- relevance to Andy's portfolio
+);
+
+CREATE TABLE tax_changes (
+    id              TEXT PRIMARY KEY,
+    jurisdiction    TEXT NOT NULL,       -- 'federal', 'MN', 'hennepin_county'
+    category        TEXT NOT NULL,       -- 'income', 'property', 'capital_gains', 'deduction'
+    effective_date  TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    impact_summary  TEXT,               -- LLM: "This means X for your household"
+    source_url      TEXT,
+    confidence      REAL DEFAULT 0.8
+);
+
+-- ═══ ENGINE 2: Geopolitical & World Events ═══
+
+CREATE TABLE geopolitical_events (
+    id              TEXT PRIMARY KEY,
+    event_type      TEXT NOT NULL,       -- 'conflict', 'election', 'sanctions',
+                                        -- 'trade_agreement', 'policy_change',
+                                        -- 'natural_disaster', 'pandemic'
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    regions         TEXT NOT NULL,       -- JSON array: ['US', 'CN', 'EU']
+    started_at      TEXT NOT NULL,
+    ended_at        TEXT,               -- NULL if ongoing
+    severity        REAL,               -- 0-1 scale
+    market_impact   TEXT,               -- JSON: {sectors: [...], direction: 'negative', magnitude: 0.7}
+    source          TEXT NOT NULL,       -- 'gdelt', 'reuters', 'congress_gov'
+    source_url      TEXT,
+    related_events  TEXT                -- JSON array of event IDs
+);
+
+CREATE TABLE policy_tracker (
+    id              TEXT PRIMARY KEY,
+    jurisdiction    TEXT NOT NULL,
+    policy_type     TEXT NOT NULL,       -- 'bill', 'executive_order', 'regulation', 'fed_statement'
+    title           TEXT NOT NULL,
+    status          TEXT NOT NULL,       -- 'proposed', 'committee', 'passed', 'signed', 'effective'
+    introduced_date TEXT NOT NULL,
+    last_action     TEXT,
+    impact_domains  TEXT,               -- JSON: ['finance', 'health', 'home']
+    summary         TEXT,               -- LLM summary
+    household_impact TEXT,              -- LLM: "Here's what this means for you"
+    source_url      TEXT
+);
+
+-- ═══ ENGINE 3: AI/ML Research Sentinel ═══
+
+CREATE TABLE research_papers (
+    id              TEXT PRIMARY KEY,
+    arxiv_id        TEXT,
+    semantic_scholar_id TEXT,
+    title           TEXT NOT NULL,
+    authors         TEXT NOT NULL,       -- JSON array
+    abstract        TEXT NOT NULL,
+    published_date  TEXT NOT NULL,
+    categories      TEXT NOT NULL,       -- JSON: ['cs.AI', 'cs.LG']
+    summary         TEXT,               -- LLM: distilled key contribution
+    technique_type  TEXT,               -- 'memory', 'rag', 'fine_tuning', 'agents', etc.
+    applicability   TEXT,               -- JSON: {jarvis_component: 'memory_bus', improvement: '~15%', effort: 'medium'}
+    quality_score   REAL,               -- citation count + venue + recency
+    code_url        TEXT,               -- GitHub repo if available
+    reviewed        INTEGER DEFAULT 0,  -- 1 = Sentinel has evaluated for Jarvis applicability
+    actionable      INTEGER DEFAULT 0   -- 1 = could directly improve our systems
+);
+
+CREATE TABLE tracked_repos (
+    id              TEXT PRIMARY KEY,
+    github_url      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    stars           INTEGER,
+    language        TEXT,
+    license         TEXT,
+    last_commit     TEXT,
+    topics          TEXT,               -- JSON array
+    relevance       TEXT,               -- JSON: which Jarvis components this relates to
+    summary         TEXT,               -- LLM: what this repo does and why we care
+    first_seen      TEXT NOT NULL,
+    last_checked    TEXT NOT NULL,
+    status          TEXT DEFAULT 'tracking' -- 'tracking', 'evaluated', 'integrated', 'archived'
+);
+
+CREATE TABLE model_registry (
+    id              TEXT PRIMARY KEY,
+    hf_model_id     TEXT,
+    name            TEXT NOT NULL,
+    parameter_count TEXT,               -- '7B', '13B', '70B'
+    architecture    TEXT,               -- 'llama', 'mistral', 'qwen', 'gemma'
+    quantizations   TEXT,               -- JSON: ['Q4_K_M', 'Q5_K_S', 'Q8_0']
+    benchmarks      TEXT,               -- JSON: {mmlu: 0.72, humaneval: 0.65}
+    vram_required   TEXT,               -- JSON per quant: {'Q4_K_M': '4.5GB'}
+    runs_on_our_hw  INTEGER DEFAULT 0,  -- 1 = fits in 16-24GB VRAM (or 96GB unified)
+    use_case        TEXT,               -- 'routing', 'reasoning', 'coding', 'embedding'
+    first_seen      TEXT NOT NULL,
+    notes           TEXT                -- LLM: why this matters for us
+);
+
+CREATE TABLE improvement_proposals (
+    id              TEXT PRIMARY KEY,
+    source_paper_id TEXT,               -- which paper inspired this
+    source_repo_id  TEXT,               -- which repo inspired this
+    target_component TEXT NOT NULL,     -- 'memory_bus', 'attention_gate', 'grocery_spec', etc.
+    proposal        TEXT NOT NULL,      -- LLM: what to change and why
+    estimated_impact TEXT,              -- 'minor', 'moderate', 'significant'
+    estimated_effort TEXT,              -- 'trivial', 'small', 'medium', 'large'
+    status          TEXT DEFAULT 'proposed', -- 'proposed', 'approved', 'implemented', 'rejected'
+    created_at      TEXT NOT NULL,
+    reviewed_at     TEXT,
+    review_notes    TEXT                -- Andy's feedback
+);
+
+-- ═══ ENGINE 4: Legal & Regulatory ═══
+
+CREATE TABLE regulatory_changes (
+    id              TEXT PRIMARY KEY,
+    jurisdiction    TEXT NOT NULL,       -- 'federal', 'MN', 'minneapolis'
+    domain          TEXT NOT NULL,       -- 'tax', 'zoning', 'employment', 'consumer', 'insurance'
+    title           TEXT NOT NULL,
+    effective_date  TEXT,
+    description     TEXT NOT NULL,
+    household_impact TEXT,              -- LLM: plain-English impact assessment
+    action_required TEXT,               -- JSON: [{action: "...", deadline: "..."}]
+    source          TEXT NOT NULL,       -- 'federal_register', 'mn_legislature', etc.
+    source_url      TEXT,
+    confidence      REAL DEFAULT 0.8
+);
+
+-- ═══ ENGINE 5: Health & Wellness ═══
+
+CREATE TABLE health_knowledge (
+    id              TEXT PRIMARY KEY,
+    category        TEXT NOT NULL,       -- 'nutrition', 'drug_interaction', 'exercise',
+                                        -- 'seasonal_health', 'air_quality', 'prevention'
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    source          TEXT NOT NULL,       -- 'pubmed', 'fda', 'cdc', 'local_health_dept'
+    source_url      TEXT,
+    evidence_level  TEXT,               -- 'meta_analysis', 'rct', 'observational', 'expert_opinion'
+    relevance       REAL,               -- to household health profile
+    last_verified   TEXT,
+    seasonal        INTEGER DEFAULT 0   -- 1 = seasonal relevance (allergies, flu, etc.)
+);
+
+CREATE TABLE environmental_data (
+    id              TEXT PRIMARY KEY,
+    metric          TEXT NOT NULL,       -- 'aqi', 'pollen_count', 'uv_index', 'flu_activity'
+    value           REAL NOT NULL,
+    location        TEXT NOT NULL,       -- zip code or city
+    measured_at     TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    forecast        TEXT                -- JSON: next 5 day forecast if available
+);
+
+-- ═══ ENGINE 6: Local Intelligence ═══
+
+CREATE TABLE local_data (
+    id              TEXT PRIMARY KEY,
+    category        TEXT NOT NULL,       -- 'real_estate', 'school_district', 'crime',
+                                        -- 'infrastructure', 'utilities', 'business'
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    location        TEXT,               -- address, neighborhood, zip
+    data_date       TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    source_url      TEXT,
+    trend           TEXT                -- JSON: historical values for trend analysis
+);
+
+-- ═══ ENGINE 7: Family & Life Quality ═══
+
+CREATE TABLE family_activities (
+    id              TEXT PRIMARY KEY,
+    category        TEXT NOT NULL,       -- 'outdoor', 'indoor', 'event', 'travel',
+                                        -- 'bonding', 'educational', 'seasonal'
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    location        TEXT,               -- specific venue or area
+    distance_miles  REAL,               -- from home
+    cost_estimate   TEXT,               -- 'free', '$', '$$', '$$$'
+    age_appropriate TEXT,               -- JSON: {min_age: 4, max_age: 16}
+    duration        TEXT,               -- '2 hours', 'half day', 'weekend'
+    season          TEXT,               -- 'any', 'summer', 'winter', 'spring', 'fall'
+    weather_req     TEXT,               -- 'outdoor_clear', 'any', 'indoor'
+    source          TEXT NOT NULL,       -- 'alltrails', 'eventbrite', 'parks_rec', 'tripadvisor'
+    source_url      TEXT,
+    rating          REAL,               -- source rating
+    household_rating REAL,              -- our family's rating (after doing it)
+    last_done       TEXT,               -- when we last did this
+    times_done      INTEGER DEFAULT 0,  -- how many times
+    notes           TEXT                -- family notes, tips, memories
+);
+
+CREATE TABLE vacation_research (
+    id              TEXT PRIMARY KEY,
+    destination     TEXT NOT NULL,
+    trip_type       TEXT NOT NULL,       -- 'road_trip', 'flight', 'camping', 'staycation'
+    estimated_cost  REAL,
+    duration_days   INTEGER,
+    best_season     TEXT,
+    kid_friendly    INTEGER DEFAULT 1,
+    highlights      TEXT,               -- JSON array of attractions/activities
+    logistics       TEXT,               -- JSON: travel time, accommodation options, tips
+    source          TEXT NOT NULL,
+    source_url      TEXT,
+    household_interest REAL DEFAULT 0.5, -- learned from family preferences
+    saved_at        TEXT NOT NULL,
+    planned_for     TEXT                -- NULL or target date
+);
+
+CREATE TABLE parenting_knowledge (
+    id              TEXT PRIMARY KEY,
+    category        TEXT NOT NULL,       -- 'development', 'education', 'activities',
+                                        -- 'health', 'social', 'screen_time', 'sleep'
+    age_range       TEXT,               -- '5-7', '8-10', 'teen', etc.
+    title           TEXT NOT NULL,
+    content         TEXT NOT NULL,       -- research-backed advice or activity idea
+    source          TEXT NOT NULL,       -- 'pubmed', 'aap', 'child_dev_journal'
+    evidence_level  TEXT,
+    actionable      INTEGER DEFAULT 0,  -- 1 = contains specific things to try
+    seasonal        INTEGER DEFAULT 0
+);
+
+CREATE TABLE local_events (
+    id              TEXT PRIMARY KEY,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    venue           TEXT,
+    address         TEXT,
+    event_date      TEXT NOT NULL,
+    event_time      TEXT,
+    end_date        TEXT,               -- for multi-day events
+    cost            TEXT,               -- 'free', '$5', '$10-20'
+    category        TEXT,               -- 'festival', 'market', 'concert', 'sports',
+                                        -- 'kids', 'community', 'holiday'
+    family_friendly INTEGER DEFAULT 1,
+    source          TEXT NOT NULL,       -- 'eventbrite', 'parks_rec', 'community_calendar'
+    source_url      TEXT,
+    distance_miles  REAL,
+    relevance       REAL                -- scored against family preferences
+);
+```
+
+---
+
+### Gap 3: Training Data Export Pipeline
+
+Every engine should tag its data for training readiness. This enables the long-term goal of fine-tuning household-specific models.
+
+```python
+class TrainingDataExporter:
+    """
+    Exports knowledge into standard training formats.
+    Runs on-demand or as part of a monthly pipeline.
+    """
+
+    def export_instruction_pairs(self, domain: str = None,
+                                  min_quality: float = 0.7,
+                                  format: str = "sharegpt") -> str:
+        """
+        Export question→answer pairs from decision logs + graded outcomes.
+        Each pair: (user question, Jarvis response, outcome grade).
+        Format: ShareGPT JSON for instruction tuning.
+        """
+        decisions = self.memory_bus.audit.query(
+            domain=domain,
+            min_grade=min_quality,
+            has_outcome=True,
+        )
+
+        pairs = []
+        for d in decisions:
+            pair = {
+                "conversations": [
+                    {"from": "human", "value": d.user_message},
+                    {"from": "gpt", "value": d.response},
+                ],
+                "metadata": {
+                    "domain": d.domain,
+                    "grade": d.grade,
+                    "outcome": d.outcome_summary,
+                    "provenance": d.provenance_chain,
+                },
+            }
+            pairs.append(pair)
+
+        return self._write_jsonl(pairs, format)
+
+    def export_dpo_pairs(self, domain: str = None,
+                         min_grade_diff: float = 0.3) -> str:
+        """
+        Export DPO (Direct Preference Optimization) training pairs.
+        Finds cases where similar queries got different grades:
+        (prompt, chosen_response, rejected_response).
+        """
+        ...
+
+    def export_knowledge_corpus(self, engines: list[str] = None,
+                                 format: str = "parquet") -> str:
+        """
+        Export raw knowledge for continued pre-training.
+        Includes world knowledge from all engines as clean text.
+        """
+        ...
+
+    def training_readiness_report(self) -> dict:
+        """
+        How much training-quality data do we have?
+        Returns counts by domain, quality tier, and format.
+        """
+        return {
+            "instruction_pairs": {
+                "total": self._count_gradable_decisions(),
+                "high_quality": self._count_gradable_decisions(min_grade=0.8),
+                "by_domain": self._count_by_domain(),
+            },
+            "dpo_pairs": self._count_dpo_candidates(),
+            "knowledge_corpus": {
+                "total_tokens": self._estimate_corpus_tokens(),
+                "by_engine": self._corpus_by_engine(),
+            },
+            "estimated_readiness": self._readiness_assessment(),
+            # e.g., "~6 months until LoRA fine-tune viable for grocery domain"
+        }
+```
+
+```sql
+-- Training readiness metadata (added to kb_index)
+ALTER TABLE kb_index ADD COLUMN training_ready INTEGER DEFAULT 0;
+ALTER TABLE kb_index ADD COLUMN training_quality REAL;       -- 0-1
+ALTER TABLE kb_index ADD COLUMN training_format TEXT;         -- 'instruction', 'dpo', 'corpus'
+ALTER TABLE kb_index ADD COLUMN training_exported_at TEXT;    -- last export timestamp
+
+-- Decision grades for DPO pair mining (extends agent_memory)
+CREATE TABLE decision_grades (
+    id              TEXT PRIMARY KEY,
+    decision_id     TEXT NOT NULL,
+    grade_type      TEXT NOT NULL,       -- 'short_term' (24h), 'long_term' (7-30d)
+    grade           REAL NOT NULL,       -- 0-1
+    graded_at       TEXT NOT NULL,
+    grading_method  TEXT NOT NULL,       -- 'auto_acceptance', 'auto_outcome', 'user_feedback'
+    evidence        TEXT,               -- why this grade
+    grader_model    TEXT                -- which model did the grading
+);
+```
+
+---
+
+### Gap 4: Bitemporal Knowledge for Time-Series Reasoning
+
+Financial and geopolitical engines need to answer: "What did we *believe* on date X?" vs. "What was *actually true* on date X?" This is essential for backtesting and for training models on temporal reasoning.
+
+```sql
+-- Bitemporal knowledge table
+-- valid_from/valid_to = when the fact was TRUE in the real world
+-- known_from/known_to = when WE KNEW about it
+CREATE TABLE bitemporal_facts (
+    id              TEXT PRIMARY KEY,
+    domain          TEXT NOT NULL,
+    fact_type       TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    value           REAL,               -- for numeric facts
+
+    -- Temporal dimensions
+    valid_from      TEXT NOT NULL,       -- when this became true in reality
+    valid_to        TEXT,               -- when this stopped being true (NULL = still true)
+    known_from      TEXT NOT NULL,       -- when Jarvis learned this
+    known_to        TEXT,               -- when Jarvis learned this was wrong (NULL = still believed)
+
+    -- Revision tracking
+    revision_of     TEXT,               -- ID of the fact this revises
+    revision_reason TEXT,               -- why the revision happened
+
+    -- Standard metadata
+    source          TEXT NOT NULL,
+    confidence      REAL DEFAULT 0.8,
+    provenance_id   TEXT
+);
+
+CREATE INDEX idx_bitemporal_valid ON bitemporal_facts(domain, fact_type, valid_from);
+CREATE INDEX idx_bitemporal_known ON bitemporal_facts(domain, fact_type, known_from);
+```
+
+**Query patterns this enables:**
+
+```sql
+-- "What did we think GDP growth was on March 15?"
+SELECT * FROM bitemporal_facts
+WHERE domain = 'economic' AND fact_type = 'gdp_growth'
+  AND valid_from <= '2026-03-15'
+  AND (valid_to IS NULL OR valid_to > '2026-03-15')
+  AND known_from <= '2026-03-15'
+  AND (known_to IS NULL OR known_to > '2026-03-15');
+
+-- "How did our belief about Q1 GDP change over time?" (revision history)
+SELECT * FROM bitemporal_facts
+WHERE domain = 'economic' AND fact_type = 'gdp_growth'
+  AND valid_from = '2026-01-01'
+ORDER BY known_from;
+```
+
+---
+
+### Gap 5: Multi-Node Federation Strategy
+
+When EVO-X2 nodes come online, the Knowledge Lake must span machines.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    FEDERATION ARCHITECTURE                       │
+│                                                                  │
+│  NODE 1: Primary (current machine)                              │
+│  ├── Interaction memory (Tiers 1-3)                             │
+│  ├── Engine 6 (Local Intelligence)                              │
+│  ├── Engine 7 (Family & Life Quality)                           │
+│  ├── Household adapters (grocery, home, calendar)               │
+│  └── PRIMARY facts.db (source of truth)                         │
+│                                                                  │
+│  NODE 2: EVO-X2 #1 — Heavy Reasoning                           │
+│  ├── Engine 1 (Financial Intelligence) — heavy models           │
+│  ├── Engine 2 (Geopolitical Events)                             │
+│  ├── Engine 4 (Legal & Regulatory)                              │
+│  ├── InvestorSpec (70B reasoning models)                        │
+│  └── REPLICA facts.db (Litestream sync from primary)            │
+│                                                                  │
+│  NODE 3: EVO-X2 #2 — Research & Training                       │
+│  ├── Engine 3 (AI Research Sentinel)                            │
+│  ├── Engine 5 (Health & Wellness)                               │
+│  ├── Model training jobs (LoRA fine-tuning)                     │
+│  ├── MetaCognitive Supervisor                                   │
+│  └── REPLICA facts.db (Litestream sync from primary)            │
+│                                                                  │
+│  SYNC STRATEGY:                                                  │
+│  ├── Litestream: continuous SQLite WAL replication               │
+│  │   Primary → S3-compatible local MinIO → Replicas             │
+│  ├── ChromaDB: per-node shards, cross-node search via API       │
+│  ├── Blackboard: Redis or ZeroMQ pub/sub for real-time signals  │
+│  └── Conflict resolution: last-writer-wins + provenance audit   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Updated Implementation Priority (Full 7-Engine System)
+
+| Priority | Component | Reason |
+|----------|-----------|--------|
+| 1st | Memory Bus + Three-Tier Hierarchy | Foundation for everything |
+| 2nd | IngestionBuffer + World Knowledge path | Engines can't store data without this |
+| 3rd | Provenance Chain | Start tracking from day 1 |
+| 4th | Engine 1 (Financial) + Engine 3 (AI Research) | Highest ROI engines — investment intelligence + self-improvement |
+| 5th | Consolidation Engine + Zettelkasten Linking | Cross-engine connections start forming |
+| 6th | Engine 2 (Geopolitical) + Engine 4 (Legal) | Feed context to financial engine |
+| 7th | Tiered Storage (Hot/Warm/Cold) | Needed once engines run for ~3 months |
+| 8th | Engine 5 (Health) + Engine 6 (Local) + Engine 7 (Family) | Quality of life engines |
+| 9th | Bitemporal facts + Training Export Pipeline | Needed once 6+ months of data accumulated |
+| 10th | Multi-Node Federation | When first EVO-X2 arrives |
+| 11th | Full model fine-tuning pipeline | When 12-18 months of graded data exists |

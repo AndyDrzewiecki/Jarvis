@@ -415,10 +415,81 @@ This means Jarvis's routing decisions are informed by what the specialists have 
 
 ---
 
+## The Unified Orchestration Vision — 7 Knowledge Engines
+
+**Added: 2026-04-13** | Jarvis's scope expands from household assistant to **local intelligence infrastructure**.
+
+The original Phase 2 design focused on operational specialists (grocery, finance, home, etc.) that handle day-to-day tasks. The expanded vision adds **7 continuous knowledge accumulation engines** that build deep, world-knowledge databases locally. These engines don't just answer questions — they build a proprietary knowledge base large enough to eventually **train household-specific models**.
+
+### Engine Architecture
+
+Each engine follows the same BaseSpecialist pattern (gather/analyze/write/improve) but with a heavier emphasis on the "gather" and "improve" phases. Engines are write-heavy — they're constantly pulling from external sources and enriching the Knowledge Lake.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│              UNIFIED ORCHESTRATION: 7 KNOWLEDGE ENGINES          │
+│                                                                   │
+│  OPERATIONAL SPECIALISTS          KNOWLEDGE ENGINES               │
+│  (respond to user queries)        (build world knowledge)         │
+│                                                                   │
+│  ┌──────────┐ ┌──────────┐       ┌──────────────────────────┐    │
+│  │ Grocery  │ │ Calendar │       │ 1. Financial & Economic  │    │
+│  │ Spec     │ │ Spec     │       │ 2. Geopolitical Events   │    │
+│  │          │ │          │       │ 3. AI Research Sentinel  │    │
+│  └────┬─────┘ └────┬─────┘       │ 4. Legal & Regulatory    │    │
+│       │            │             │ 5. Health & Wellness     │    │
+│  ┌────┴─────┐ ┌────┴─────┐       │ 6. Local Intelligence    │    │
+│  │ Home     │ │ Finance  │       │ 7. Family & Life Quality │    │
+│  │ Spec     │ │ Spec     │       └──────────┬───────────────┘    │
+│  └────┬─────┘ └────┬─────┘                  │                    │
+│       │            │                        │                    │
+│       └────────────┴────────────────────────┘                    │
+│                           │                                       │
+│                    ┌──────▼──────┐                                │
+│                    │  KNOWLEDGE  │                                │
+│                    │    LAKE     │  ← Both read AND write here   │
+│                    │  (unified)  │                                │
+│                    └──────┬──────┘                                │
+│                           │                                       │
+│                    ┌──────▼──────────────────┐                    │
+│                    │  TRAINING DATA PIPELINE │                    │
+│                    │  Export → LoRA fine-tune │                    │
+│                    │  (12-18 month horizon)  │                    │
+│                    └────────────────────────┘                    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Cross-Engine Intelligence Flows
+
+The real power emerges from engines feeding each other:
+
+- **Financial Engine** detects Fed rate hike → **Geopolitical Engine** correlates with trade policy → **Investor Specialist** adjusts portfolio risk
+- **AI Research Sentinel** finds new RAG technique → **MetaCognitive Supervisor** evaluates for Jarvis → **Improvement Proposal** auto-filed
+- **Local Intelligence** finds free park event → **Family Engine** checks calendar for open slots → **Daily Brief** suggests Saturday outing
+- **Health Engine** detects high pollen forecast → **Calendar Specialist** suggests indoor activities → **Family Engine** recommends museum visit
+- **Legal Engine** detects MN property tax change → **Financial Engine** recalculates household impact → **Finance Specialist** alerts Andy
+
+### Long-Term Goal: Model Training
+
+After 12-18 months of continuous engine operation, the Knowledge Lake will contain:
+- **8M+ structured records** across all domains
+- **Thousands of graded decision pairs** (question → answer → outcome grade)
+- **Cross-domain causal relationships** that no public dataset captures
+- **Household-specific preference signals** from acceptance/rejection patterns
+
+This data enables fine-tuning specialist LoRA adapters on local hardware (EVO-X2, 96GB unified memory) that are genuinely better than general-purpose models for this household's specific use cases.
+
+See MEMORY-ARCHITECTURE.md Addendum for full schemas, storage strategy, and training export pipeline.
+
+---
+
 ## Open Questions
 
 1. **Google Auth flow** — should this be a one-time CLI OAuth dance, or should the FastAPI server handle it with a callback URL?
 2. **KB backup strategy** — litestream for continuous SQLite replication to a backup location?
 3. **Specialist model selection** — should each specialist use the same model, or should heavy-reasoning specialists (investor, research) get bigger models?
 4. **Family member profiles** — should the KB have a `family_members` table so specialists can personalize (e.g., "Emma has soccer on Tuesdays")?
+5. **Engine scheduling strategy** — stagger engines to avoid GPU contention on single-node, or run lightweight engines on CPU while heavy engines use GPU?
+6. **Data retention policy** — how long to keep raw ingestion data vs. summarized knowledge? Balance disk usage against training data completeness.
+7. **Family Engine privacy** — child-related data needs extra care. Local-only storage with no cloud sync? Encrypted at rest?
 5. **PraxisForma integration** — how does Jarvis interact with PraxisForma? Shared KB? API calls? Same Ollama instance?
