@@ -37,6 +37,23 @@ CREATE TABLE IF NOT EXISTS decisions (
 )
 """
 
+_GRADES_DDL = """
+CREATE TABLE IF NOT EXISTS decision_grades (
+    id                   TEXT PRIMARY KEY,
+    decision_id          TEXT NOT NULL,
+    short_term_grade     TEXT,
+    short_term_score     REAL,
+    short_term_reason    TEXT,
+    short_term_graded_at TEXT,
+    long_term_grade      TEXT,
+    long_term_score      REAL,
+    long_term_reason     TEXT,
+    long_term_graded_at  TEXT,
+    grading_model        TEXT,
+    revised              INTEGER DEFAULT 0
+)
+"""
+
 # Track which DB paths have been initialised (and migrated) this process.
 _inited: set[str] = set()
 
@@ -47,6 +64,7 @@ def _open(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute(_DDL)
+    conn.execute(_GRADES_DDL)
     conn.commit()
     if db_path not in _inited:
         _inited.add(db_path)
@@ -194,3 +212,77 @@ def recent_decisions(n: int = 20) -> list[dict]:
         return [_row_to_dict(r) for r in reversed(rows)]
     except Exception:
         return []
+
+
+def save_grade(
+    decision_id: str,
+    short_term_grade: str,
+    short_term_score: float,
+    short_term_reason: str,
+    model: str = "",
+) -> str:
+    """Insert or update a short-term grade for a decision. Returns grade id."""
+    grade_id = str(uuid.uuid4())
+    try:
+        conn = _open(DB_PATH)
+        # Check if grade already exists
+        existing = conn.execute(
+            "SELECT id FROM decision_grades WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE decision_grades
+                   SET short_term_grade=?, short_term_score=?, short_term_reason=?,
+                       short_term_graded_at=?, grading_model=?
+                   WHERE decision_id=?""",
+                (short_term_grade, short_term_score, short_term_reason,
+                 datetime.now().isoformat(), model, decision_id),
+            )
+            grade_id = existing["id"]
+        else:
+            conn.execute(
+                """INSERT INTO decision_grades
+                   (id, decision_id, short_term_grade, short_term_score,
+                    short_term_reason, short_term_graded_at, grading_model)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (grade_id, decision_id, short_term_grade, short_term_score,
+                 short_term_reason, datetime.now().isoformat(), model),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return grade_id
+
+
+def get_ungraded_decisions(since_hours: int = 24) -> list[dict]:
+    """Return decisions from the last N hours that have no grade row yet."""
+    try:
+        conn = _open(DB_PATH)
+        from datetime import timedelta
+        since_dt = datetime.now() - timedelta(hours=since_hours)
+        rows = conn.execute(
+            """SELECT d.* FROM decisions d
+               LEFT JOIN decision_grades g ON d.id = g.decision_id
+               WHERE g.id IS NULL
+               AND d.timestamp >= ?
+               ORDER BY d.timestamp""",
+            (since_dt.isoformat(),),
+        ).fetchall()
+        conn.close()
+        return [_row_to_dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def get_grade(decision_id: str) -> dict | None:
+    """Retrieve grade record for a decision. Returns None if not graded."""
+    try:
+        conn = _open(DB_PATH)
+        row = conn.execute(
+            "SELECT * FROM decision_grades WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
+        conn.close()
+        return _row_to_dict(row) if row else None
+    except Exception:
+        return None
