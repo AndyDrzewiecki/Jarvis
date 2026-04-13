@@ -1,5 +1,6 @@
 """Tests for BaseAdapter, AdapterResult, stub adapters, and decision memory integration."""
 from __future__ import annotations
+import time
 import pytest
 import jarvis.agent_memory as am
 from jarvis.adapters.base import BaseAdapter, AdapterResult
@@ -153,3 +154,70 @@ def test_safe_run_logs_duration_ms():
     match = next(d for d in decisions if d["agent"] == "fast_adapter")
     assert match["duration_ms"] is not None
     assert match["duration_ms"] >= 0
+
+
+# ── timeout tests ─────────────────────────────────────────────────────────────
+
+def test_safe_run_times_out(monkeypatch, tmp_path):
+    """Adapter that sleeps forever should time out within a few seconds."""
+    import jarvis.agent_memory as _am
+    monkeypatch.setattr(_am, "DB_PATH", str(tmp_path / "timeout_decisions.db"))
+    _am._inited.discard(str(tmp_path / "timeout_decisions.db"))
+
+    monkeypatch.setenv("JARVIS_ADAPTER_TIMEOUT", "1")
+
+    class SlowAdapter(BaseAdapter):
+        name = "slow_adapter"
+        def run(self, capability, params):
+            import time as _time
+            _time.sleep(999)
+            return AdapterResult(success=True, text="never", adapter=self.name)
+
+    a = SlowAdapter()
+    t_start = time.monotonic()
+    result = a.safe_run("slow_thing", {})
+    elapsed = time.monotonic() - t_start
+
+    assert result.success is False
+    assert "Timed out" in result.text
+    assert elapsed < 5, f"Timeout test took too long: {elapsed:.1f}s"
+
+
+def test_safe_run_completes_normally(monkeypatch):
+    """Adapter that returns immediately should still work after timeout logic added."""
+    monkeypatch.setenv("JARVIS_ADAPTER_TIMEOUT", "30")
+
+    class QuickAdapter(BaseAdapter):
+        name = "quick_adapter"
+        def run(self, capability, params):
+            return AdapterResult(success=True, text="done quickly", adapter=self.name)
+
+    a = QuickAdapter()
+    result = a.safe_run("quick_thing", {})
+    assert result.success is True
+    assert result.text == "done quickly"
+
+
+def test_timeout_is_logged_to_agent_memory(monkeypatch, tmp_path):
+    """After a timeout, agent_memory should contain a 'timeout' entry."""
+    import jarvis.agent_memory as _am
+    monkeypatch.setattr(_am, "DB_PATH", str(tmp_path / "timeout_log.db"))
+    _am._inited.discard(str(tmp_path / "timeout_log.db"))
+
+    monkeypatch.setenv("JARVIS_ADAPTER_TIMEOUT", "1")
+
+    class TimedOutAdapter(BaseAdapter):
+        name = "timed_out_adapter"
+        def run(self, capability, params):
+            import time as _time
+            _time.sleep(999)
+            return AdapterResult(success=True, text="never", adapter=self.name)
+
+    a = TimedOutAdapter()
+    a.safe_run("time_consuming", {})
+
+    decisions = _am.recent_decisions(n=10)
+    match = next((d for d in decisions if d["agent"] == "timed_out_adapter"), None)
+    assert match is not None, "No decision logged for timed out adapter"
+    assert match["outcome"] == "failure"
+    assert "timeout" in match["decision"].lower() or "timeout" in (match.get("reasoning") or "").lower()

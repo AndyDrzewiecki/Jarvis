@@ -1,28 +1,18 @@
 """
 TUTORIAL: GroceryAdapter wraps the grocery_agent.py that lives in C:/AI-Lab/agents/.
-It adds C:/AI-Lab/agents to sys.path so the import resolves regardless of cwd.
+Uses jarvis.integrations to add the agents directory to sys.path cleanly.
 Capabilities: meal_plan, shopping_list, inventory, price_check.
 """
 from __future__ import annotations
-import sys
-import os
 from typing import Any
-
-# Ensure the shared agents directory is importable
-_AGENTS_DIR = os.path.normpath(r"C:/AI-Lab/agents")
-if _AGENTS_DIR not in sys.path:
-    sys.path.insert(0, _AGENTS_DIR)
 
 from jarvis.adapters.base import BaseAdapter, AdapterResult
 
 
 def _import_grocery():
     """Lazy import so tests can mock before import."""
-    try:
-        import grocery_agent as ga
-        return ga
-    except ImportError as e:
-        return None
+    from jarvis.integrations import import_integration
+    return import_integration("grocery_agent")
 
 
 class GroceryAdapter(BaseAdapter):
