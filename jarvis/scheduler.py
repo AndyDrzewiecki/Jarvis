@@ -28,6 +28,7 @@ BRIEF_TZ = os.getenv("JARVIS_BRIEF_TZ", "America/Chicago")
 SPOKEN_BRIEF_HOUR = int(os.getenv("JARVIS_SPOKEN_BRIEF_HOUR", "8"))
 
 _scheduler: Optional[object] = None  # BackgroundScheduler instance
+_specialists: list = []
 
 
 def _run_daily_brief() -> None:
@@ -73,6 +74,33 @@ def _run_spoken_brief_push() -> None:
         logger.info("Spoken brief pushed to WebSocket clients.")
     except Exception as exc:
         logger.error("Spoken brief push job failed: %s", exc)
+
+
+def _run_specialist_cycle(specialist_name: str) -> None:
+    """Scheduled job: run one specialist's gather/analyze/improve cycle."""
+    try:
+        spec = next((s for s in _specialists if s.name == specialist_name), None)
+        if spec is None:
+            logger.warning("Specialist %r not found in registry", specialist_name)
+            return
+        report = spec.run_cycle()
+        logger.info(
+            "Specialist %s cycle done: gathered=%d insights=%d gaps=%d error=%s",
+            specialist_name, report.gathered, report.insights, report.gaps_identified, report.error,
+        )
+    except Exception as exc:
+        logger.error("Specialist cycle job failed for %s: %s", specialist_name, exc)
+
+
+def _run_short_term_grading() -> None:
+    """Scheduled job: grade yesterday's decisions."""
+    try:
+        from jarvis.grading import DecisionGrader
+        grader = DecisionGrader()
+        count = grader.run_short_term_batch()
+        logger.info("Short-term grading complete: %d decisions graded", count)
+    except Exception as exc:
+        logger.error("Short-term grading job failed: %s", exc)
 
 
 def _run_workflow_check() -> None:
@@ -146,11 +174,41 @@ def start() -> None:
         SPOKEN_BRIEF_HOUR,
     )
 
+    # Wire specialists if enabled
+    global _specialists
+    from jarvis import config
+    if config.SPECIALISTS_ENABLED:
+        try:
+            from jarvis.specialists import start_all
+            from apscheduler.triggers.cron import CronTrigger
+            _specialists = start_all()
+            for spec in _specialists:
+                _scheduler.add_job(
+                    _run_specialist_cycle,
+                    trigger=CronTrigger.from_crontab(spec.schedule),
+                    args=[spec.name],
+                    id=f"specialist_{spec.name}",
+                    replace_existing=True,
+                )
+                logger.info("Registered specialist %s on schedule %s", spec.name, spec.schedule)
+        except Exception as exc:
+            logger.error("Failed to register specialists: %s", exc)
+
+    _scheduler.add_job(
+        _run_short_term_grading,
+        trigger="cron",
+        hour=23,
+        minute=0,
+        id="short_term_grading",
+        replace_existing=True,
+    )
+
 
 def stop() -> None:
     """Stop the background scheduler gracefully."""
-    global _scheduler
+    global _scheduler, _specialists
     if _scheduler is not None and getattr(_scheduler, "running", False):
         _scheduler.shutdown(wait=False)
         logger.info("Scheduler stopped.")
     _scheduler = None
+    _specialists = []
