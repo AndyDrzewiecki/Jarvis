@@ -63,6 +63,14 @@ class BaseSpecialist:
             self._lake = KnowledgeLake()
         return self._lake
 
+    @property
+    def household_state(self):
+        """Lazy HouseholdState accessor."""
+        if not hasattr(self, '_household_state') or self._household_state is None:
+            from jarvis.household_state import HouseholdState
+            self._household_state = HouseholdState()
+        return self._household_state
+
     def run_cycle(self) -> CycleReport:
         """Full specialist loop: gather -> analyze -> write to KB -> improve."""
         report = CycleReport(specialist=self.name)

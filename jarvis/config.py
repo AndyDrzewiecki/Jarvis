@@ -24,6 +24,7 @@ EPISODES_DB_PATH  = os.getenv("JARVIS_EPISODES_DB",  os.path.join(DATA_DIR, "epi
 SEMANTIC_DB_PATH  = os.getenv("JARVIS_SEMANTIC_DB",  os.path.join(DATA_DIR, "semantic.db"))
 CHROMADB_PATH     = os.getenv("JARVIS_CHROMADB_PATH", os.path.join(DATA_DIR, "chromadb"))
 PREFS_PATH        = os.getenv("JARVIS_PREFS_PATH",    os.path.join(DATA_DIR, "preferences.json"))
+HOUSEHOLD_STATE_PATH = os.getenv("JARVIS_HOUSEHOLD_STATE", os.path.join(DATA_DIR, "household_state.json"))
 
 # ── Behaviour ─────────────────────────────────────────────────────────────────
 ADAPTER_TIMEOUT_S        = int(os.getenv("JARVIS_ADAPTER_TIMEOUT",  "30"))

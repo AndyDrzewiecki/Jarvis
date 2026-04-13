@@ -83,7 +83,18 @@ class GrocerySpec(BaseSpecialist):
             budget_facts = cross_context["finance"][:2]
             budget_ctx = "\n".join(f"  Budget: {b.get('summary','')}" for b in budget_facts)
 
+        # Check budget sensitivity and prepend note if needed
+        budget_mode_note = ""
+        try:
+            if self.household_state.is_budget_sensitive():
+                budget_mode_note = (
+                    "BUDGET SENSITIVE MODE: Prioritize cost savings and value optimization.\n\n"
+                )
+        except Exception as exc:
+            logger.warning("GrocerySpec.analyze: household_state check failed: %s", exc)
+
         prompt = (
+            f"{budget_mode_note}"
             "You are the Jarvis grocery specialist. Analyze this household grocery data and "
             "generate 2-4 actionable insights (price changes, inventory alerts, meal suggestions).\n\n"
             f"Grocery data:\n{items_text}\n"

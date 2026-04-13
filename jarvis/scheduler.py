@@ -103,6 +103,32 @@ def _run_short_term_grading() -> None:
         logger.error("Short-term grading job failed: %s", exc)
 
 
+def _run_consolidation() -> None:
+    """Scheduled job: consolidate episodic memories into semantic knowledge."""
+    try:
+        from jarvis.consolidation import ConsolidationEngine
+        engine = ConsolidationEngine()
+        report = engine.run()
+        logger.info(
+            "Consolidation job done: episodes=%d created=%d reinforced=%d pruned=%d error=%s",
+            report.episodes_processed, report.facts_created, report.facts_reinforced,
+            report.episodes_pruned, report.error,
+        )
+    except Exception as exc:
+        logger.error("Consolidation job failed: %s", exc)
+
+
+def _run_long_term_grading() -> None:
+    """Scheduled job: re-grade decisions from 7-30 days ago."""
+    try:
+        from jarvis.grading import DecisionGrader
+        grader = DecisionGrader()
+        count = grader.run_long_term_batch()
+        logger.info("Long-term grading complete: %d decisions re-graded", count)
+    except Exception as exc:
+        logger.error("Long-term grading job failed: %s", exc)
+
+
 def _run_workflow_check() -> None:
     """Scheduled job: evaluate workflow triggers and fire/queue actions."""
     try:
@@ -202,6 +228,25 @@ def start() -> None:
         id="short_term_grading",
         replace_existing=True,
     )
+
+    if config.SPECIALISTS_ENABLED:
+        _scheduler.add_job(
+            _run_long_term_grading,
+            trigger="cron",
+            day_of_week="sun",
+            hour=2,
+            minute=0,
+            id="long_term_grading",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            _run_consolidation,
+            trigger="cron",
+            hour=3,
+            minute=0,
+            id="consolidation",
+            replace_existing=True,
+        )
 
 
 def stop() -> None:

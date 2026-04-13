@@ -286,3 +286,76 @@ def get_grade(decision_id: str) -> dict | None:
         return _row_to_dict(row) if row else None
     except Exception:
         return None
+
+
+def get_decisions_for_long_term_grading(
+    min_age_days: int = 7, max_age_days: int = 30
+) -> list[tuple[dict, dict]]:
+    """Return (decision, grade) pairs eligible for long-term grading.
+
+    Criteria:
+    - decision was made between min_age_days and max_age_days ago
+    - short-term grade exists (short_term_grade IS NOT NULL)
+    - long-term grade does not yet exist (long_term_grade IS NULL)
+    """
+    from datetime import timedelta
+    try:
+        conn = _open(DB_PATH)
+        min_ts = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        max_ts = (datetime.now() - timedelta(days=min_age_days)).isoformat()
+        rows = conn.execute(
+            """SELECT d.*, g.id AS grade_id, g.short_term_grade, g.short_term_score,
+                      g.short_term_reason, g.short_term_graded_at, g.long_term_grade,
+                      g.long_term_score, g.long_term_reason, g.long_term_graded_at,
+                      g.grading_model
+               FROM decisions d
+               JOIN decision_grades g ON d.id = g.decision_id
+               WHERE d.timestamp >= ?
+                 AND d.timestamp <= ?
+                 AND g.short_term_grade IS NOT NULL
+                 AND g.long_term_grade IS NULL
+               ORDER BY d.timestamp""",
+            (min_ts, max_ts),
+        ).fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            d = _row_to_dict(row)
+            decision = {k: d[k] for k in (
+                "id", "timestamp", "agent", "capability", "decision",
+                "reasoning", "confidence", "outcome", "linked_message_id",
+                "params_summary", "duration_ms",
+            ) if k in d}
+            grade = {k: d[k] for k in (
+                "short_term_grade", "short_term_score", "short_term_reason",
+                "short_term_graded_at", "long_term_grade", "long_term_score",
+                "long_term_reason", "long_term_graded_at", "grading_model",
+            ) if k in d}
+            result.append((decision, grade))
+        return result
+    except Exception:
+        return []
+
+
+def update_long_term_grade(
+    decision_id: str,
+    long_term_grade: str,
+    long_term_score: float,
+    long_term_reason: str,
+    model: str = "",
+) -> None:
+    """Update the long_term_* columns on an existing decision_grades row."""
+    try:
+        conn = _open(DB_PATH)
+        conn.execute(
+            """UPDATE decision_grades
+               SET long_term_grade=?, long_term_score=?, long_term_reason=?,
+                   long_term_graded_at=?, grading_model=?
+               WHERE decision_id=?""",
+            (long_term_grade, long_term_score, long_term_reason,
+             datetime.now().isoformat(), model, decision_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
