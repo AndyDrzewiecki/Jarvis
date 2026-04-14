@@ -129,6 +129,36 @@ def _run_long_term_grading() -> None:
         logger.error("Long-term grading job failed: %s", exc)
 
 
+def _run_guideline_evolution() -> None:
+    """Scheduled job: evolve specialist guidelines based on graded decisions."""
+    try:
+        from jarvis.guideline_evolver import GuidelineEvolver
+        evolver = GuidelineEvolver()
+        for domain in ("grocery", "finance", "calendar", "weather"):
+            result = evolver.evolve(domain)
+            logger.info(
+                "Guideline evolution %s: v%d→v%d patterns=%d corrective=%d reinforcement=%d",
+                domain, result.old_version, result.new_version,
+                result.patterns_analyzed, result.corrective_count, result.reinforcement_count,
+            )
+    except Exception as exc:
+        logger.error("Guideline evolution job failed: %s", exc)
+
+
+def _run_context_rebuild() -> None:
+    """Scheduled job: rebuild specialist context engines."""
+    try:
+        from jarvis.context_engine import ContextEngine
+        engine = ContextEngine()
+        for domain in ("grocery", "finance", "calendar", "weather"):
+            context = engine.rebuild(domain)
+            logger.info(
+                "Context rebuild %s: %d chars", domain, len(context)
+            )
+    except Exception as exc:
+        logger.error("Context rebuild job failed: %s", exc)
+
+
 def _run_workflow_check() -> None:
     """Scheduled job: evaluate workflow triggers and fire/queue actions."""
     try:
@@ -245,6 +275,24 @@ def start() -> None:
             hour=3,
             minute=0,
             id="consolidation",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            _run_guideline_evolution,
+            trigger="cron",
+            day=1,
+            hour=4,
+            minute=0,
+            id="guideline_evolution",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            _run_context_rebuild,
+            trigger="cron",
+            day_of_week="mon",
+            hour=5,
+            minute=0,
+            id="context_rebuild",
             replace_existing=True,
         )
 

@@ -107,7 +107,8 @@ class GrocerySpec(BaseSpecialist):
 
         try:
             from jarvis.core import _ask_ollama
-            raw_response = _ask_ollama(prompt, model=self.model)
+            injected_prompt = self.context_engine.inject(self.domain, prompt)
+            raw_response = _ask_ollama(injected_prompt, model=self.model)
             return self._parse_insights(raw_response)
         except Exception as exc:
             logger.warning("GrocerySpec.analyze LLM call failed: %s", exc)

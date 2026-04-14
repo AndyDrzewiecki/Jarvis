@@ -71,6 +71,14 @@ class BaseSpecialist:
             self._household_state = HouseholdState()
         return self._household_state
 
+    @property
+    def context_engine(self):
+        """Lazy ContextEngine accessor."""
+        if not hasattr(self, '_context_engine') or self._context_engine is None:
+            from jarvis.context_engine import ContextEngine
+            self._context_engine = ContextEngine()
+        return self._context_engine
+
     def run_cycle(self) -> CycleReport:
         """Full specialist loop: gather -> analyze -> write to KB -> improve."""
         report = CycleReport(specialist=self.name)
