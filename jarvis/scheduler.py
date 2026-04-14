@@ -247,6 +247,26 @@ def start() -> None:
     # Wire specialists if enabled
     global _specialists
     from jarvis import config
+    if config.ENGINES_ENABLED:
+        try:
+            import jarvis.engines.financial  # noqa: F401
+            import jarvis.engines.research   # noqa: F401
+            from jarvis.engines import ENGINE_REGISTRY
+            from apscheduler.triggers.cron import CronTrigger
+            for engine_cls in ENGINE_REGISTRY:
+                engine_inst = engine_cls()
+                _specialists.append(engine_inst)
+                _scheduler.add_job(
+                    _run_specialist_cycle,
+                    trigger=CronTrigger.from_crontab(engine_inst.schedule),
+                    args=[engine_inst.name],
+                    id=f"engine_{engine_inst.name}",
+                    replace_existing=True,
+                )
+                logger.info("Engine scheduled: %s (%s)", engine_inst.name, engine_inst.schedule)
+        except Exception as exc:
+            logger.error("Failed to register knowledge engines: %s", exc)
+
     if config.SPECIALISTS_ENABLED:
         try:
             from jarvis.specialists import start_all

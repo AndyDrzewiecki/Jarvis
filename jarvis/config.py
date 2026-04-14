@@ -56,6 +56,13 @@ PROCEDURAL_FASTPATH = os.getenv("JARVIS_PROCEDURAL_FASTPATH", "false").lower() i
 GOOGLE_CREDENTIALS_PATH = os.getenv("JARVIS_GOOGLE_CREDS", os.path.join(DATA_DIR, "google_credentials.json"))
 NEWS_FEED_URLS: list[str] = [u.strip() for u in os.getenv("JARVIS_NEWS_FEEDS", "").split(",") if u.strip()]
 
+# ── Knowledge Engines (Phase 3) ────────────────────────────────────────────────
+ENGINES_DIR = os.getenv("JARVIS_ENGINES_DIR", os.path.join(DATA_DIR, "engines"))
+ENGINES_ENABLED = os.getenv("JARVIS_ENGINES_ENABLED", "false").lower() in ("true", "1", "yes")
+FRED_API_KEY = os.getenv("JARVIS_FRED_API_KEY", "")
+GITHUB_TOKEN = os.getenv("JARVIS_GITHUB_TOKEN", "")
+TRACKED_SYMBOLS: list[str] = [s.strip() for s in os.getenv("JARVIS_TRACKED_SYMBOLS", "SPY,QQQ,BTC-USD").split(",") if s.strip()]
+
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 def get(key: str, default: Any = None) -> Any:
