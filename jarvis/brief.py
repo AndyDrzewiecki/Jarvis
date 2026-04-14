@@ -80,6 +80,27 @@ class BriefEngine:
             else:
                 unavailable.append(adapter_name)
 
+        # Include recent memory changes from last 24 hours
+        try:
+            from datetime import timedelta
+            from jarvis.introspection import MemoryIntrospector
+            since_24h = (datetime.now() - timedelta(hours=24)).isoformat()
+            inspector = MemoryIntrospector()
+            diff = inspector.memory_diff(since_24h)
+            new_count = diff.get("new_count", 0)
+            if new_count > 0:
+                new_facts = diff.get("new_facts", [])[:5]
+                fact_lines = [
+                    f"- {f.get('summary', f.get('content', ''))[:120]}"
+                    for f in new_facts
+                ]
+                sections["memory_changes"] = (
+                    f"{new_count} new knowledge fact(s) in the last 24 hours:\n"
+                    + "\n".join(fact_lines)
+                )
+        except Exception:
+            pass
+
         text = self._synthesize(sections, unavailable)
 
         agent_memory.log_decision(

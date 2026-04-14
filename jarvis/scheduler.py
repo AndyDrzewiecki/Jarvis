@@ -145,6 +145,20 @@ def _run_guideline_evolution() -> None:
         logger.error("Guideline evolution job failed: %s", exc)
 
 
+def _run_preference_mining() -> None:
+    """Scheduled job: mine preference rules from recent interaction signals."""
+    try:
+        from jarvis.preference_learning import PreferenceMiner
+        miner = PreferenceMiner()
+        total = 0
+        for domain in ("grocery", "finance", "calendar", "general"):
+            count = miner.mine(domain=domain)
+            total += count
+        logger.info("Preference mining complete: %d rules upserted across all domains", total)
+    except Exception as exc:
+        logger.error("Preference mining job failed: %s", exc)
+
+
 def _run_context_rebuild() -> None:
     """Scheduled job: rebuild specialist context engines."""
     try:
@@ -293,6 +307,15 @@ def start() -> None:
             hour=5,
             minute=0,
             id="context_rebuild",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            _run_preference_mining,
+            trigger="cron",
+            day_of_week="sat",
+            hour=4,
+            minute=0,
+            id="preference_mining",
             replace_existing=True,
         )
 

@@ -50,6 +50,7 @@ NOTIFICATION_LEVEL  = os.getenv("JARVIS_NOTIFICATION_LEVEL", "important")
 # ── Feature flags ─────────────────────────────────────────────────────────────
 PERSONALITY_ENABLED = os.getenv("JARVIS_PERSONALITY", "true").lower() in ("true", "1", "yes")
 BRIEF_VOICE_ENABLED = os.getenv("JARVIS_BRIEF_VOICE", "true").lower() in ("true", "1", "yes")
+PROCEDURAL_FASTPATH = os.getenv("JARVIS_PROCEDURAL_FASTPATH", "false").lower() in ("true", "1", "yes")
 
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("JARVIS_GOOGLE_CREDS", os.path.join(DATA_DIR, "google_credentials.json"))

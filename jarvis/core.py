@@ -364,6 +364,24 @@ def chat(user_message: str) -> AdapterResult:
         memory.add("assistant", result.text)
         return result
 
+    # Procedural fast-path: log match, reinforce procedure (direct execution gated by config)
+    try:
+        from jarvis.memory_bus import get_bus as _get_bus_proc
+        _proc_bus = _get_bus_proc()
+        proc = _proc_bus.procedural.match(user_message)
+        if proc:
+            from jarvis import config as _cfg
+            agent_memory.log_decision(
+                agent="router", capability="procedural_match",
+                decision=f"Procedural match: {proc['trigger_pattern'][:100]} → {proc['action_sequence'][:100]}",
+                reasoning=f"confidence={proc.get('confidence')}, exec_count={proc.get('execution_count')}",
+                outcome="success",
+            )
+            _proc_bus.procedural.reinforce(proc["id"])
+            # PROCEDURAL_FASTPATH is false by default — log only, still route normally
+    except Exception:
+        pass
+
     routes = _route_message(user_message, linked_message_id=msg_id)
 
     if routes:

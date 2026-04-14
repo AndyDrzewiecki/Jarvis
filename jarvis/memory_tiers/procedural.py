@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 import os, sqlite3, uuid
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "procedures.db")
 
@@ -70,3 +73,53 @@ class ProceduralStore:
             conn.close()
             return [dict(r) for r in rows]
         except Exception: return []
+
+    def compile_from_episodes(self, episodes: list[dict], messages_by_episode: dict[str, list[dict]]) -> str | None:
+        """Analyze similar episodes → extract common action sequence → create procedure."""
+        transcripts = []
+        for ep in episodes[:5]:
+            msgs = messages_by_episode.get(ep["id"], [])
+            lines = [f"{m['role']}: {m.get('content', '')[:100]}" for m in msgs[:10]]
+            transcripts.append(f"Episode ({ep.get('domain', '?')}):\n" + "\n".join(lines))
+        combined = "\n---\n".join(transcripts)
+        prompt = (
+            "These episodes show a repeated user pattern.\n\n"
+            f"{combined}\n\n"
+            "Extract the common trigger pattern and action sequence.\n"
+            "TRIGGER: <what the user typically says/asks>\n"
+            "ACTION: <what Jarvis should do — adapter:capability>\n"
+            "CONFIDENCE: <0.0-1.0>\n"
+            "If no clear pattern, output: NONE\n"
+        )
+        try:
+            from jarvis.core import _ask_ollama
+            from jarvis import config
+            raw = _ask_ollama(prompt, model=config.FALLBACK_MODEL)
+            return self._parse_compilation(raw, [ep["id"] for ep in episodes])
+        except Exception as exc:
+            logger.warning("Procedural compilation failed: %s", exc)
+            return None
+
+    def _parse_compilation(self, raw: str, episode_ids: list[str]) -> str | None:
+        """Parse compilation response and create procedure if valid."""
+        trigger = action = None
+        confidence = 0.5
+        for line in raw.strip().splitlines():
+            line = line.strip()
+            if line.startswith("TRIGGER:"):
+                trigger = line[8:].strip()
+            elif line.startswith("ACTION:"):
+                action = line[7:].strip()
+            elif line.startswith("CONFIDENCE:"):
+                try:
+                    confidence = max(0.0, min(1.0, float(line[11:].strip())))
+                except ValueError:
+                    pass
+        if trigger and action and confidence >= 0.5:
+            return self.add(
+                trigger_pattern=trigger,
+                action_sequence=action,
+                confidence=confidence,
+                compiled_from=",".join(episode_ids[:5]),
+            )
+        return None

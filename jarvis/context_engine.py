@@ -80,6 +80,17 @@ class ContextEngine:
         except Exception:
             pass
 
+        # 6. Learned preferences
+        try:
+            from jarvis.preference_learning import PreferenceMiner
+            miner = PreferenceMiner()
+            prefs = miner.get_preferences(domain=domain, min_confidence=0.5)
+            if prefs:
+                pref_lines = [f"- {p['rule']} (confidence: {p['confidence']:.2f})" for p in prefs[:10]]
+                sections.append("## Learned Preferences\n" + "\n".join(pref_lines))
+        except Exception:
+            pass
+
         context_text = "\n\n".join(sections)
         self._save_file(domain, "context_engine.md", context_text)
 

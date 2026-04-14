@@ -204,6 +204,32 @@ async def summerpuppy_webhook(payload: dict):
     return {"received": True, "severity": severity}
 
 
+# ── memory introspection ───────────────────────────────────────────────────────
+
+@app.get("/api/memory/audit")
+async def memory_audit(domain: Optional[str] = None):
+    """Audit knowledge quality for a domain (or all domains)."""
+    from jarvis.introspection import MemoryIntrospector
+    inspector = MemoryIntrospector()
+    return inspector.knowledge_audit(domain)
+
+
+@app.get("/api/memory/diff")
+async def memory_diff(since: str):
+    """Return knowledge changes since a given ISO timestamp."""
+    from jarvis.introspection import MemoryIntrospector
+    inspector = MemoryIntrospector()
+    return inspector.memory_diff(since)
+
+
+@app.get("/api/memory/explain/{decision_id}")
+async def memory_explain(decision_id: str):
+    """Trace a decision through its provenance chain."""
+    from jarvis.introspection import MemoryIntrospector
+    inspector = MemoryIntrospector()
+    return inspector.explain_recommendation(decision_id)
+
+
 # ── history & decisions ────────────────────────────────────────────────────────
 
 @app.get("/api/history")

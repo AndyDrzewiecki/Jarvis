@@ -89,6 +89,12 @@ class ConsolidationEngine:
                     )
             report.episodes_processed += 1
 
+        # Procedural compilation step
+        try:
+            self._compile_procedures()
+        except Exception as exc:
+            logger.warning("Procedural compilation step failed: %s", exc)
+
         # Prune old low-satisfaction episodes
         try:
             pruned = self.bus.episodic.prune(older_than_days=90, min_satisfaction=0.3)
@@ -184,6 +190,32 @@ class ConsolidationEngine:
             insights.append(Insight(fact_type=fact_type, content=content, confidence=confidence))
 
         return insights
+
+    def _compile_procedures(self) -> None:
+        """Detect repeated routing patterns across consolidated episodes → compile into procedures."""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.bus.episodic._db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM episodes WHERE consolidated = 1 ORDER BY started_at DESC LIMIT 100"
+            ).fetchall()
+            conn.close()
+
+            domain_episodes: dict[str, list] = {}
+            for row in rows:
+                ep = dict(row)
+                d = ep.get("domain") or "general"
+                domain_episodes.setdefault(d, []).append(ep)
+
+            for domain, eps in domain_episodes.items():
+                if len(eps) >= 5:
+                    messages_by_ep = {ep["id"]: self.bus.episodic.get_messages(ep["id"]) for ep in eps[:5]}
+                    proc_id = self.bus.procedural.compile_from_episodes(eps[:5], messages_by_ep)
+                    if proc_id:
+                        logger.info("Compiled procedure %s from %d %s episodes", proc_id, 5, domain)
+        except Exception as exc:
+            logger.warning("Procedural compilation step failed: %s", exc)
 
     def _merge_into_semantic(self, insight, lake) -> str:
         """Search existing facts; reinforce if overlap exists, else create new."""
