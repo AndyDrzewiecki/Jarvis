@@ -52,6 +52,10 @@ PERSONALITY_ENABLED = os.getenv("JARVIS_PERSONALITY", "true").lower() in ("true"
 BRIEF_VOICE_ENABLED = os.getenv("JARVIS_BRIEF_VOICE", "true").lower() in ("true", "1", "yes")
 
 
+GOOGLE_CREDENTIALS_PATH = os.getenv("JARVIS_GOOGLE_CREDS", os.path.join(DATA_DIR, "google_credentials.json"))
+NEWS_FEED_URLS: list[str] = [u.strip() for u in os.getenv("JARVIS_NEWS_FEEDS", "").split(",") if u.strip()]
+
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 def get(key: str, default: Any = None) -> Any:
     """Read a config value by name. Allows runtime override in tests."""

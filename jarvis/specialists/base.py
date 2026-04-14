@@ -79,6 +79,14 @@ class BaseSpecialist:
             self._context_engine = ContextEngine()
         return self._context_engine
 
+    @property
+    def blackboard(self):
+        """Lazy SharedBlackboard accessor."""
+        if not hasattr(self, '_blackboard') or self._blackboard is None:
+            from jarvis.blackboard import SharedBlackboard
+            self._blackboard = SharedBlackboard()
+        return self._blackboard
+
     def run_cycle(self) -> CycleReport:
         """Full specialist loop: gather -> analyze -> write to KB -> improve."""
         report = CycleReport(specialist=self.name)
