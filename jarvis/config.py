@@ -62,6 +62,8 @@ ENGINES_ENABLED = os.getenv("JARVIS_ENGINES_ENABLED", "false").lower() in ("true
 FRED_API_KEY = os.getenv("JARVIS_FRED_API_KEY", "")
 GITHUB_TOKEN = os.getenv("JARVIS_GITHUB_TOKEN", "")
 TRACKED_SYMBOLS: list[str] = [s.strip() for s in os.getenv("JARVIS_TRACKED_SYMBOLS", "SPY,QQQ,BTC-USD").split(",") if s.strip()]
+CONGRESS_API_KEY = os.getenv("JARVIS_CONGRESS_API_KEY", "")
+GEOPOLITICAL_FEEDS: list[str] = [u.strip() for u in os.getenv("JARVIS_GEOPOLITICAL_FEEDS", "").split(",") if u.strip()]
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

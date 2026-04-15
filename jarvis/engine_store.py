@@ -65,9 +65,37 @@ CREATE TABLE IF NOT EXISTS improvement_proposals (
 );
 """
 
+# ═══ ENGINE 2: Geopolitical & World Events ═══
+_GEOPOLITICAL_DDL = """
+CREATE TABLE IF NOT EXISTS geopolitical_events (
+    id TEXT PRIMARY KEY, event_type TEXT NOT NULL, title TEXT NOT NULL,
+    description TEXT NOT NULL, regions TEXT NOT NULL, started_at TEXT NOT NULL,
+    ended_at TEXT, severity REAL, market_impact TEXT,
+    source TEXT NOT NULL, source_url TEXT, related_events TEXT
+);
+CREATE TABLE IF NOT EXISTS policy_tracker (
+    id TEXT PRIMARY KEY, jurisdiction TEXT NOT NULL, policy_type TEXT NOT NULL,
+    title TEXT NOT NULL, status TEXT NOT NULL, introduced_date TEXT NOT NULL,
+    last_action TEXT, impact_domains TEXT, summary TEXT,
+    household_impact TEXT, source_url TEXT
+);
+"""
+
+# ═══ ENGINE 4: Legal & Regulatory ═══
+_LEGAL_DDL = """
+CREATE TABLE IF NOT EXISTS regulatory_changes (
+    id TEXT PRIMARY KEY, jurisdiction TEXT NOT NULL, domain TEXT NOT NULL,
+    title TEXT NOT NULL, effective_date TEXT, description TEXT NOT NULL,
+    household_impact TEXT, action_required TEXT, source TEXT NOT NULL,
+    source_url TEXT, confidence REAL DEFAULT 0.8
+);
+"""
+
 _ENGINE_DDL = {
     "financial": _FINANCIAL_DDL,
     "research": _RESEARCH_DDL,
+    "geopolitical": _GEOPOLITICAL_DDL,
+    "legal": _LEGAL_DDL,
 }
 
 _TABLE_ENGINE = {
@@ -79,6 +107,9 @@ _TABLE_ENGINE = {
     "tracked_repos": "research",
     "model_registry": "research",
     "improvement_proposals": "research",
+    "geopolitical_events": "geopolitical",
+    "policy_tracker": "geopolitical",
+    "regulatory_changes": "legal",
 }
 
 class EngineStore:
