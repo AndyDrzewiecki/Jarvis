@@ -18,6 +18,25 @@ Endpoints:
   POST /api/workflows/{name}/approve → approve a pending workflow action
   POST /api/devteam/promote     → promote DevTeam artifact to target dir
 
+Phase 6 — Smart Home Hub:
+  GET  /api/smarthome/devices               → list all devices
+  POST /api/smarthome/devices               → register a device
+  GET  /api/smarthome/devices/{id}          → get single device
+  DELETE /api/smarthome/devices/{id}        → remove device
+  POST /api/smarthome/devices/{id}/command  → send command to device
+  POST /api/smarthome/scan/ble              → trigger BLE discovery scan
+  GET  /api/smarthome/automations           → list automation rules
+  POST /api/smarthome/automations           → create rule
+  GET  /api/smarthome/automations/{id}      → get rule
+  PUT  /api/smarthome/automations/{id}      → update rule
+  DELETE /api/smarthome/automations/{id}    → delete rule
+  POST /api/smarthome/automations/{id}/trigger → manually fire rule
+  GET  /api/smarthome/automations/log       → recent execution log
+  POST /api/smarthome/voice                 → process voice command
+  GET  /api/smarthome/scenes                → list scenes
+  POST /api/smarthome/scenes                → create/update scene
+  DELETE /api/smarthome/scenes/{name}       → delete scene
+
 CORS is enabled for all origins so the web dashboard can connect.
 """
 from __future__ import annotations
@@ -830,6 +849,345 @@ async def push_to_all(message: dict) -> None:
             dead.append(did)
     for d in dead:
         _active_connections.pop(d, None)
+
+
+# ── Phase 6: Smart Home Hub endpoints ────────────────────────────────────────
+
+from jarvis.smarthome.registry import DeviceRegistry as _DeviceRegistry
+from jarvis.smarthome.automation import AutomationEngine as _AutomationEngine
+from jarvis.smarthome.voice_handler import VoiceHandler as _VoiceHandler
+from jarvis.smarthome.ble_scanner import BLEScanner as _BLEScanner
+from jarvis.smarthome.models import (
+    BaseDevice as _BaseDevice,
+    DeviceType as _DeviceType,
+    Protocol as _Protocol,
+    DeviceStatus as _DeviceStatus,
+    DeviceState as _DeviceState,
+    AutomationRule as _AutomationRule,
+    AutomationTrigger as _AutomationTrigger,
+    AutomationAction as _AutomationAction,
+    TriggerType as _TriggerType,
+    ActionType as _ActionType,
+)
+from jarvis.smarthome.adapters import (
+    MockAdapter as _MockAdapter,
+    HubSpaceAdapter as _HubSpaceAdapter,
+    ApplianceAdapter as _ApplianceAdapter,
+    TVAdapter as _TVAdapter,
+    GenericMQTTAdapter as _GenericMQTTAdapter,
+)
+
+# Singleton instances (lazy init)
+_sh_registry: "_DeviceRegistry | None" = None
+_sh_automation: "_AutomationEngine | None" = None
+_sh_voice: "_VoiceHandler | None" = None
+_sh_ble: "_BLEScanner | None" = None
+
+_ADAPTER_REGISTRY: dict[str, Any] = {}
+
+
+def _get_sh_registry() -> "_DeviceRegistry":
+    global _sh_registry
+    if _sh_registry is None:
+        _sh_registry = _DeviceRegistry()
+    return _sh_registry
+
+
+def _get_adapter_registry() -> dict[str, Any]:
+    global _ADAPTER_REGISTRY
+    if not _ADAPTER_REGISTRY:
+        _ADAPTER_REGISTRY = {
+            "mock":         _MockAdapter(),
+            "hubspace":     _HubSpaceAdapter(),
+            "appliance":    _ApplianceAdapter(),
+            "tv":           _TVAdapter(),
+            "generic_mqtt": _GenericMQTTAdapter(),
+            "generic":      _GenericMQTTAdapter(),
+        }
+    return _ADAPTER_REGISTRY
+
+
+def _get_sh_automation() -> "_AutomationEngine":
+    global _sh_automation
+    if _sh_automation is None:
+        _sh_automation = _AutomationEngine(
+            registry=_get_sh_registry(),
+            adapter_registry=_get_adapter_registry(),
+        )
+    return _sh_automation
+
+
+def _get_sh_voice() -> "_VoiceHandler":
+    global _sh_voice
+    if _sh_voice is None:
+        _sh_voice = _VoiceHandler(
+            registry=_get_sh_registry(),
+            automation_engine=_get_sh_automation(),
+            adapter_registry=_get_adapter_registry(),
+        )
+    return _sh_voice
+
+
+def _get_sh_ble() -> "_BLEScanner":
+    global _sh_ble
+    if _sh_ble is None:
+        _sh_ble = _BLEScanner()
+        # Register brand matchers
+        _sh_ble.register_matcher("hubspace", _HubSpaceAdapter.ble_matcher)
+        _sh_ble.register_matcher("appliance", _ApplianceAdapter.ble_matcher)
+        _sh_ble.register_matcher("tv", _TVAdapter.ble_matcher)
+    return _sh_ble
+
+
+# ── Pydantic models for smart home API ───────────────────────────────────────
+
+class _SHDeviceRegisterReq(BaseModel):
+    display_name: str
+    device_type: str
+    protocol: str
+    room: str
+    address: str = ""
+    manufacturer: str = ""
+    model: str = ""
+    adapter_type: str = "generic"
+    capabilities: list[str] = []
+    metadata: dict = {}
+
+
+class _SHCommandReq(BaseModel):
+    command: str
+    params: dict = {}
+
+
+class _SHVoiceReq(BaseModel):
+    utterance: str
+    room: str = "unknown"
+
+
+class _SHAutomationReq(BaseModel):
+    name: str
+    description: str = ""
+    enabled: bool = True
+    trigger: dict
+    actions: list[dict]
+
+
+class _SHSceneReq(BaseModel):
+    name: str
+    actions: list[dict]
+
+
+# ── Devices ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/smarthome/devices")
+def sh_list_devices(
+    room: Optional[str] = Query(None),
+    device_type: Optional[str] = Query(None),
+):
+    """List all registered smart home devices."""
+    reg = _get_sh_registry()
+    if room:
+        devices = reg.list_by_room(room)
+    elif device_type:
+        devices = reg.list_by_type(_DeviceType(device_type))
+    else:
+        devices = reg.list_all()
+    return {"devices": [d.to_dict() for d in devices], "total": len(devices)}
+
+
+@app.post("/api/smarthome/devices", status_code=201)
+def sh_register_device(req: _SHDeviceRegisterReq):
+    """Register a new smart home device."""
+    from fastapi import HTTPException
+    try:
+        device = _BaseDevice.new(
+            display_name=req.display_name,
+            device_type=_DeviceType(req.device_type),
+            protocol=_Protocol(req.protocol),
+            room=req.room.lower(),
+            address=req.address,
+            manufacturer=req.manufacturer,
+            model=req.model,
+            adapter_type=req.adapter_type,
+            capabilities=req.capabilities,
+            metadata=req.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    reg = _get_sh_registry()
+    reg.register(device)
+    return device.to_dict()
+
+
+@app.get("/api/smarthome/devices/{device_id}")
+def sh_get_device(device_id: str):
+    from fastapi import HTTPException
+    device = _get_sh_registry().get(device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return device.to_dict()
+
+
+@app.delete("/api/smarthome/devices/{device_id}")
+def sh_delete_device(device_id: str):
+    from fastapi import HTTPException
+    deleted = _get_sh_registry().delete(device_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"deleted": device_id}
+
+
+@app.post("/api/smarthome/devices/{device_id}/command")
+def sh_device_command(device_id: str, req: _SHCommandReq):
+    """Send a command to a specific device."""
+    from fastapi import HTTPException
+    reg = _get_sh_registry()
+    device = reg.get(device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    adapters = _get_adapter_registry()
+    adapter = adapters.get(device.adapter_type)
+    if adapter is None:
+        raise HTTPException(status_code=400, detail=f"No adapter for {device.adapter_type!r}")
+    result = adapter.send_command(device, req.command, req.params)
+    if result.success and result.new_state:
+        reg.update_state(device_id, result.new_state)
+    return result.to_dict()
+
+
+# ── BLE scan ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/smarthome/scan/ble")
+def sh_ble_scan(timeout: float = Query(5.0, ge=1.0, le=30.0)):
+    """Trigger a BLE discovery scan. Returns found devices with adapter classification."""
+    scanner = _get_sh_ble()
+    discoveries = scanner.scan(timeout=timeout)
+    classified = scanner.classify(discoveries)
+    return {
+        "found": len(classified),
+        "bleak_available": scanner.bleak_available,
+        "devices": classified,
+    }
+
+
+# ── Automations ───────────────────────────────────────────────────────────────
+
+@app.get("/api/smarthome/automations")
+def sh_list_automations(enabled_only: bool = Query(False)):
+    engine = _get_sh_automation()
+    rules = engine.list_rules(enabled_only=enabled_only)
+    return {"rules": [r.to_dict() for r in rules], "total": len(rules)}
+
+
+@app.post("/api/smarthome/automations", status_code=201)
+def sh_create_automation(req: _SHAutomationReq):
+    from fastapi import HTTPException
+    try:
+        trigger = _AutomationTrigger.from_dict(req.trigger)
+        actions = [_AutomationAction.from_dict(a) for a in req.actions]
+        rule = _AutomationRule.new(
+            name=req.name,
+            description=req.description,
+            enabled=req.enabled,
+            trigger=trigger,
+            actions=actions,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _get_sh_automation().create_rule(rule)
+    return rule.to_dict()
+
+
+@app.get("/api/smarthome/automations/log")
+def sh_automation_log(limit: int = Query(50, ge=1, le=200)):
+    """Return recent automation execution log."""
+    return {"log": _get_sh_automation().recent_log(limit=limit)}
+
+
+@app.get("/api/smarthome/automations/{rule_id}")
+def sh_get_automation(rule_id: str):
+    from fastapi import HTTPException
+    rule = _get_sh_automation().get_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return rule.to_dict()
+
+
+@app.put("/api/smarthome/automations/{rule_id}")
+def sh_update_automation(rule_id: str, req: _SHAutomationReq):
+    from fastapi import HTTPException
+    engine = _get_sh_automation()
+    existing = engine.get_rule(rule_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    try:
+        trigger = _AutomationTrigger.from_dict(req.trigger)
+        actions = [_AutomationAction.from_dict(a) for a in req.actions]
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    existing.name = req.name
+    existing.description = req.description
+    existing.enabled = req.enabled
+    existing.trigger = trigger
+    existing.actions = actions
+    engine.update_rule(existing)
+    return existing.to_dict()
+
+
+@app.delete("/api/smarthome/automations/{rule_id}")
+def sh_delete_automation(rule_id: str):
+    from fastapi import HTTPException
+    deleted = _get_sh_automation().delete_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"deleted": rule_id}
+
+
+@app.post("/api/smarthome/automations/{rule_id}/trigger")
+def sh_trigger_automation(rule_id: str):
+    from fastapi import HTTPException
+    results = _get_sh_automation().trigger_manual(rule_id)
+    if results is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"rule_id": rule_id, "results": [r.to_dict() for r in results]}
+
+
+# ── Voice ─────────────────────────────────────────────────────────────────────
+
+@app.post("/api/smarthome/voice")
+def sh_voice_command(req: _SHVoiceReq):
+    """Process a natural language voice command for smart home control."""
+    handler = _get_sh_voice()
+    response = handler.process(req.utterance, room=req.room)
+    return {
+        "parsed": response.parsed.to_dict(),
+        "device_ids": response.device_ids,
+        "results": response.results,
+        "spoken_reply": response.spoken_reply,
+        "automation_fired": response.automation_fired,
+    }
+
+
+# ── Scenes ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/smarthome/scenes")
+def sh_list_scenes():
+    return {"scenes": _get_sh_registry().list_scenes()}
+
+
+@app.post("/api/smarthome/scenes", status_code=201)
+def sh_create_scene(req: _SHSceneReq):
+    _get_sh_registry().save_scene(req.name, req.actions)
+    return {"name": req.name, "actions": req.actions}
+
+
+@app.delete("/api/smarthome/scenes/{scene_name}")
+def sh_delete_scene(scene_name: str):
+    from fastapi import HTTPException
+    deleted = _get_sh_registry().delete_scene(scene_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    return {"deleted": scene_name}
 
 
 if __name__ == "__main__":

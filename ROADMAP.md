@@ -113,28 +113,42 @@
 
 ---
 
-## Phase 6: Smart Home Hub
-*Goal: Replace Alexa/Google Home entirely*
+## Phase 6: Smart Home Hub (COMPLETE)
+*Commit: 2026-04-15 — 2091 tests total*
 
 ### Bluetooth & IoT Integration
-- BLE device discovery and pairing
-- Device-specific adapters:
-  - **Lighting:** HubSpace smart lights, any Zigbee/Z-Wave bulbs
-  - **Kitchen:** Instant Pot, Camp Chef (BLE cooking monitors)
-  - **Entertainment:** TVs (CEC/IR/BLE), speakers, media players
-  - **Climate:** thermostats, fans, humidifiers
-  - **General IoT:** any device with BLE, MQTT, or Zigbee protocol
+- `jarvis/smarthome/` module: `models`, `registry`, `ble_scanner`, `mqtt_client`
+- **BLEScanner** — async device discovery via bleak (graceful degradation without it); matcher registry for brand detection; classifies discovered devices by adapter type
+- **DeviceRegistry** — SQLite-backed device store; CRUD + state updates + status tracking + scenes; room/type filters; state survives restart
+- **MQTTClient** — paho-mqtt wrapper with per-topic callbacks, wildcard support, inject_message for testing; graceful degradation without paho
+- **Device-specific adapters** (`jarvis/smarthome/adapters/`):
+  - `HubSpaceAdapter` — HubSpace BLE lights (Home Depot brand): power, brightness, color_temp, RGB
+  - `ApplianceAdapter` — Instant Pot + Camp Chef: mode validation (pressure_cook, slow_cook, sauté, smoke, etc.)
+  - `TVAdapter` — TVs via CEC (cec-client), IR (irsend/LIRC), or BLE; graceful fallback when tools absent
+  - `GenericMQTTAdapter` / `GenericHTTPAdapter` — any MQTT or REST device following Jarvis topic/endpoint conventions
+  - `MockAdapter` — full in-memory adapter for testing; handles all commands
 
 ### Voice Control
-- Always-listening from any tablet
-- Natural language → device commands ("turn off the kitchen lights", "set the Instant Pot to slow cook")
-- Contextual awareness (knows which room you're in based on which tablet heard you)
+- **VoiceHandler** — two-tier NL parser: fast regex → LLM fallback path
+  - Intents: turn_on/off, set_brightness, set_color_temp, set_volume, set_temperature, set_mode, get_state
+  - Room context from tablet (which room heard the command)
+  - Device type extraction from utterance ("lights", "TV", "thermostat", "instant pot")
+  - Automation voice-trigger integration ("goodnight" → fires goodnight scene)
+- `POST /api/smarthome/voice` endpoint — wires into existing Android wake-word + FastAPI pipeline
 
 ### Automation Engine
-- Time-based rules ("dim lights at 9 PM")
-- Sensor-triggered rules ("turn on garage lights when motion detected")
-- Cross-system rules ("when I say goodnight, lock doors + dim lights + set alarm")
-- All rules stored in Knowledge Lake, learnable via preference mining
+- **AutomationEngine** — SQLite-backed rule store + execution engine
+  - TIME triggers: "HH:MM" shorthand + full 5-field cron expressions (no library required)
+  - SENSOR triggers: fire on device state attribute changes
+  - VOICE triggers: phrase substring matching
+  - MANUAL triggers: API/UI-only rules
+- `tick()` method called from scheduler every minute for time-based rules
+- `check_sensor_triggers()` called on device state changes
+- `trigger_by_voice()` / `trigger_manual()` for instant execution
+- Post-execution hooks for blackboard integration
+- Full execution log in SQLite (run_count, last_triggered, results_json)
+- **API endpoints (18 total):** device CRUD + commands, BLE scan, automation CRUD + trigger + log, voice, scenes
+- 236 new tests across 7 test files; all 2091 tests pass
 
 ---
 
@@ -241,7 +255,7 @@ Phase 2  ████████████████████ COMPLETE (
 Phase 3  ████████████████████ COMPLETE (1626 tests — all 7 engines + startup harness)
 Phase 4  ████████████████████ COMPLETE (4A Web Dashboard + 4B Android Launcher)
 Phase 5  ████████████████████ COMPLETE (1855 tests — Computer Vision)
-Phase 6  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Smart Home Hub (BLE/IoT)
+Phase 6  ████████████████████ COMPLETE (2091 tests — Smart Home Hub)
 Phase 7  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Network Security Agent
 Phase 8  ▓░░░░░░░░░░░░░░░░░░░ IN PROGRESS — Project Forge (Autonomous Dev)
 Phase 9  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Model Training Pipeline
