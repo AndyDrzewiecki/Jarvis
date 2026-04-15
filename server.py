@@ -64,7 +64,7 @@ _CORS_ORIGINS = ["*"] if _dev_mode else os.getenv("JARVIS_CORS_ORIGINS", "http:/
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "X-Jarvis-Device-Profile", "X-Jarvis-Device-Id"],
 )
 
@@ -541,6 +541,162 @@ def notebook_summarize(item_id: str):
         raise HTTPException(status_code=404, detail="Item not found")
     summary = kb.summarize(tag_filter=doc.get("tags") or None)
     return {"item_id": item_id, "summary": summary}
+
+
+# ── Phase 4A: Specialists status ──────────────────────────────────────────────
+
+_SPECIALIST_REGISTRY = [
+    {"name": "grocery_specialist",  "domain": "grocery",  "schedule": "0 */4 * * *"},
+    {"name": "finance_specialist",  "domain": "finance",  "schedule": "0 */6 * * *"},
+    {"name": "calendar_specialist", "domain": "calendar", "schedule": "0 */2 * * *"},
+    {"name": "home_specialist",     "domain": "home",     "schedule": "0 8 * * *"},
+    {"name": "news_specialist",     "domain": "news",     "schedule": "0 */3 * * *"},
+    {"name": "investor_specialist", "domain": "investor", "schedule": "0 9,16 * * 1-5"},
+]
+
+
+@app.get("/api/specialists")
+def get_specialists():
+    """Return status of all 6 specialists with last-run info from decision log."""
+    results = []
+    for spec in _SPECIALIST_REGISTRY:
+        recent = agent_memory.query(agent=spec["name"], limit=1)
+        last = recent[0] if recent else None
+        results.append({
+            "name": spec["name"],
+            "domain": spec["domain"],
+            "schedule": spec["schedule"],
+            "last_run": last["timestamp"] if last else None,
+            "last_outcome": last["outcome"] if last else None,
+            "last_decision": last["decision"] if last else None,
+        })
+    return {"specialists": results, "count": len(results)}
+
+
+# ── Phase 4A: Knowledge Lake browser ─────────────────────────────────────────
+
+@app.get("/api/knowledge-lake")
+def knowledge_lake_browser(
+    domain: Optional[str] = Query(None),
+    fact_type: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    q: Optional[str] = Query(None),
+):
+    """Browse Knowledge Lake facts with optional domain/type/search filters."""
+    from jarvis.knowledge_lake import KnowledgeLake
+    lake = KnowledgeLake()
+    if q:
+        facts = lake.search(q, n=limit, domain=domain or None)
+    elif domain:
+        facts = lake.query_facts(domain=domain, fact_type=fact_type or None, limit=limit)
+    else:
+        grouped = lake.recent_by_domain(limit_per_domain=min(limit // 7 + 1, 20))
+        flat: list = []
+        for domain_facts in grouped.values():
+            flat.extend(domain_facts)
+        return {"facts": flat, "count": len(flat)}
+    return {"facts": facts, "count": len(facts)}
+
+
+# ── Phase 4A: Household State controls ───────────────────────────────────────
+
+_VALID_PRIMARIES = [
+    "normal", "summer", "winter", "holiday", "budget_tight",
+    "guests_coming", "vacation", "sick_day", "spring_cleaning",
+]
+_VALID_MODIFIERS = [
+    "grocery_day", "payday", "date_night", "meal_prep", "leftovers",
+    "school_night", "weekend", "long_weekend", "outdoor_dining",
+    "guests_arriving_soon", "cooking_ahead", "low_pantry",
+]
+
+
+class HouseholdStateUpdate(BaseModel):
+    action: str = Field(..., pattern=r"^(transition|add_modifier|remove_modifier)$")
+    value: str = Field(..., min_length=1, max_length=64)
+    reason: str = Field("dashboard update", max_length=256)
+
+
+@app.get("/api/household-state")
+def get_household_state():
+    """Get current household state and recent transition history."""
+    from jarvis.household_state import HouseholdState
+    state = HouseholdState()
+    return {
+        "current": state.current(),
+        "history": state.get_history(20),
+        "valid_primaries": _VALID_PRIMARIES,
+        "valid_modifiers": _VALID_MODIFIERS,
+    }
+
+
+@app.put("/api/household-state")
+def update_household_state(update: HouseholdStateUpdate):
+    """Update household state (transition primary or add/remove modifier)."""
+    from fastapi import HTTPException
+    from jarvis.household_state import HouseholdState
+    state = HouseholdState()
+    if update.action == "transition":
+        if update.value not in _VALID_PRIMARIES:
+            raise HTTPException(status_code=400, detail=f"Invalid primary: {update.value!r}")
+        state.transition(update.value, update.reason)
+    elif update.action == "add_modifier":
+        if update.value not in _VALID_MODIFIERS:
+            raise HTTPException(status_code=400, detail=f"Invalid modifier: {update.value!r}")
+        state.add_modifier(update.value, update.reason)
+    elif update.action == "remove_modifier":
+        state.remove_modifier(update.value, update.reason)
+    return {"current": state.current(), "action": update.action, "value": update.value}
+
+
+# ── Phase 4A: Engine status dashboard ────────────────────────────────────────
+
+_ENGINE_TABLES: dict[str, list[str]] = {
+    "financial":   ["economic_indicators", "market_data", "sec_filings", "tax_changes"],
+    "research":    ["research_papers", "tracked_repos", "model_registry", "improvement_proposals"],
+    "geopolitical": ["geopolitical_events", "policy_tracker"],
+    "legal":       ["regulatory_changes"],
+    "health":      ["health_knowledge", "environmental_data"],
+    "local":       ["local_data"],
+    "family":      ["family_activities", "vacation_research", "parenting_knowledge", "local_events"],
+}
+
+
+@app.get("/api/engines/status")
+def get_engines_status():
+    """Return record counts and last-ingestion info for all 7 knowledge engines."""
+    from jarvis.engine_store import EngineStore
+    store = EngineStore()
+    engines = []
+    for engine_name, tables in _ENGINE_TABLES.items():
+        table_counts: dict[str, int] = {}
+        for table in tables:
+            table_counts[table] = store.count(engine_name, table)
+        total = sum(table_counts.values())
+        recent = agent_memory.query(agent=f"{engine_name}_engine", limit=1)
+        last_run = recent[0]["timestamp"] if recent else None
+        engines.append({
+            "name": engine_name,
+            "tables": table_counts,
+            "total_records": total,
+            "last_run": last_run,
+        })
+    return {"engines": engines, "total_records": sum(e["total_records"] for e in engines)}
+
+
+# ── Phase 4A: Blackboard viewer ───────────────────────────────────────────────
+
+@app.get("/api/blackboard")
+def get_blackboard(
+    topic: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Return recent cross-specialist blackboard posts."""
+    from jarvis.blackboard import SharedBlackboard
+    bb = SharedBlackboard()
+    topics = [topic] if topic else None
+    posts = bb.read(topics=topics, limit=limit)
+    return {"posts": posts, "count": len(posts)}
 
 
 # ── WebSocket push endpoint ────────────────────────────────────────────────────
