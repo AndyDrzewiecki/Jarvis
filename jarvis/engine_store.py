@@ -91,11 +91,68 @@ CREATE TABLE IF NOT EXISTS regulatory_changes (
 );
 """
 
+# ═══ ENGINE 5: Health & Wellness ═══
+_HEALTH_DDL = """
+CREATE TABLE IF NOT EXISTS health_knowledge (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL,
+    content TEXT NOT NULL, source TEXT NOT NULL, source_url TEXT,
+    evidence_level TEXT, relevance REAL, last_verified TEXT,
+    seasonal INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS environmental_data (
+    id TEXT PRIMARY KEY, metric TEXT NOT NULL, value REAL NOT NULL,
+    location TEXT NOT NULL, measured_at TEXT NOT NULL, source TEXT NOT NULL,
+    forecast TEXT
+);
+"""
+
+# ═══ ENGINE 6: Local Intelligence ═══
+_LOCAL_DDL = """
+CREATE TABLE IF NOT EXISTS local_data (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL,
+    content TEXT NOT NULL, location TEXT, data_date TEXT NOT NULL,
+    source TEXT NOT NULL, source_url TEXT, trend TEXT
+);
+"""
+
+# ═══ ENGINE 7: Family & Life Quality ═══
+_FAMILY_DDL = """
+CREATE TABLE IF NOT EXISTS family_activities (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL,
+    description TEXT NOT NULL, location TEXT, distance_miles REAL,
+    cost_estimate TEXT, age_appropriate TEXT, duration TEXT,
+    season TEXT, weather_req TEXT, source TEXT NOT NULL, source_url TEXT,
+    rating REAL, household_rating REAL, last_done TEXT,
+    times_done INTEGER DEFAULT 0, notes TEXT
+);
+CREATE TABLE IF NOT EXISTS vacation_research (
+    id TEXT PRIMARY KEY, destination TEXT NOT NULL, trip_type TEXT NOT NULL,
+    estimated_cost REAL, duration_days INTEGER, best_season TEXT,
+    kid_friendly INTEGER DEFAULT 1, highlights TEXT, logistics TEXT,
+    source TEXT NOT NULL, source_url TEXT,
+    household_interest REAL DEFAULT 0.5, saved_at TEXT NOT NULL, planned_for TEXT
+);
+CREATE TABLE IF NOT EXISTS parenting_knowledge (
+    id TEXT PRIMARY KEY, category TEXT NOT NULL, age_range TEXT,
+    title TEXT NOT NULL, content TEXT NOT NULL, source TEXT NOT NULL,
+    evidence_level TEXT, actionable INTEGER DEFAULT 0, seasonal INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS local_events (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+    venue TEXT, address TEXT, event_date TEXT NOT NULL, event_time TEXT,
+    end_date TEXT, cost TEXT, category TEXT, family_friendly INTEGER DEFAULT 1,
+    source TEXT NOT NULL, source_url TEXT, distance_miles REAL, relevance REAL
+);
+"""
+
 _ENGINE_DDL = {
     "financial": _FINANCIAL_DDL,
     "research": _RESEARCH_DDL,
     "geopolitical": _GEOPOLITICAL_DDL,
     "legal": _LEGAL_DDL,
+    "health": _HEALTH_DDL,
+    "local": _LOCAL_DDL,
+    "family": _FAMILY_DDL,
 }
 
 _TABLE_ENGINE = {
@@ -110,6 +167,13 @@ _TABLE_ENGINE = {
     "geopolitical_events": "geopolitical",
     "policy_tracker": "geopolitical",
     "regulatory_changes": "legal",
+    "health_knowledge": "health",
+    "environmental_data": "health",
+    "local_data": "local",
+    "family_activities": "family",
+    "vacation_research": "family",
+    "parenting_knowledge": "family",
+    "local_events": "family",
 }
 
 class EngineStore:

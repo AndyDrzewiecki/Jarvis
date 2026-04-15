@@ -65,6 +65,15 @@ TRACKED_SYMBOLS: list[str] = [s.strip() for s in os.getenv("JARVIS_TRACKED_SYMBO
 CONGRESS_API_KEY = os.getenv("JARVIS_CONGRESS_API_KEY", "")
 GEOPOLITICAL_FEEDS: list[str] = [u.strip() for u in os.getenv("JARVIS_GEOPOLITICAL_FEEDS", "").split(",") if u.strip()]
 
+# ── Engines 5/6/7: Health, Local Intel, Family ────────────────────────────────
+AIRNOW_API_KEY   = os.getenv("JARVIS_AIRNOW_API_KEY", "")
+HOME_ZIP_CODE    = os.getenv("JARVIS_HOME_ZIP", "55401")   # default Minneapolis
+HOME_LAT         = os.getenv("JARVIS_HOME_LAT", "44.9778")
+HOME_LON         = os.getenv("JARVIS_HOME_LON", "-93.2650")
+EVENTBRITE_TOKEN = os.getenv("JARVIS_EVENTBRITE_TOKEN", "")
+LOCAL_FEEDS: list[str] = [u.strip() for u in os.getenv("JARVIS_LOCAL_FEEDS", "").split(",") if u.strip()]
+NPS_API_KEY      = os.getenv("JARVIS_NPS_API_KEY", "")
+
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 def get(key: str, default: Any = None) -> Any:
