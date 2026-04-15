@@ -699,6 +699,106 @@ def get_blackboard(
     return {"posts": posts, "count": len(posts)}
 
 
+# ── Phase 5: Computer Vision endpoints ───────────────────────────────────────
+
+_vision_pipeline: "VisionPipeline | None" = None
+_vision_store: "VisionStore | None" = None
+
+
+def _get_vision_pipeline():
+    global _vision_pipeline
+    if _vision_pipeline is None:
+        from jarvis.vision.pipeline import VisionPipeline
+        _vision_pipeline = VisionPipeline()
+    return _vision_pipeline
+
+
+def _get_vision_store():
+    global _vision_store
+    if _vision_store is None:
+        from jarvis.vision.store import VisionStore
+        _vision_store = VisionStore()
+    return _vision_store
+
+
+class VisionAnalyzeRequest(BaseModel):
+    image_b64: str
+    context_hint: str = "unknown"
+    device_id: str = "unknown"
+
+
+class VisionStreamRequest(BaseModel):
+    action: str
+    session_id: str
+    device_id: str = "unknown"
+    context: str = "unknown"
+
+
+@app.post("/api/vision/analyze")
+def vision_analyze(req: VisionAnalyzeRequest):
+    """Analyze a single image frame and return scene analysis + routing info."""
+    from fastapi import HTTPException
+    pipeline = _get_vision_pipeline()
+    store = _get_vision_store()
+
+    # Use pipeline with a transient (no-session) frame
+    # Create a temporary session for this one-shot analysis
+    tmp_session = f"oneshot-{req.device_id}"
+    pipeline.start_session(tmp_session, req.device_id, context=req.context_hint)
+    try:
+        event = pipeline.submit_frame(tmp_session, req.image_b64)
+    finally:
+        pipeline.stop_session(tmp_session)
+
+    # Also persist to standalone store
+    store.save_event(event)
+
+    analysis = event.analysis
+    return {
+        "event_id": event.event_id,
+        "scene_description": analysis.scene_description,
+        "detected_objects": [obj.to_dict() for obj in analysis.detected_objects],
+        "context": analysis.context,
+        "confidence": analysis.confidence,
+        "model_used": analysis.model_used,
+        "routed_to": event.routed_to,
+        "knowledge_lake_ids": event.knowledge_lake_ids,
+        "device_id": event.device_id,
+        "created_at": event.created_at,
+    }
+
+
+@app.post("/api/vision/stream")
+def vision_stream(req: VisionStreamRequest):
+    """Start or stop a camera streaming session."""
+    from fastapi import HTTPException
+    pipeline = _get_vision_pipeline()
+
+    if req.action == "start":
+        result = pipeline.start_session(req.session_id, req.device_id, context=req.context)
+        return {"status": "started", "session_id": req.session_id, "stats": result}
+    elif req.action == "stop":
+        result = pipeline.stop_session(req.session_id)
+        return {"status": "stopped", "session_id": req.session_id, "stats": result.get("stats", {})}
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid action: {req.action!r}. Must be 'start' or 'stop'.")
+
+
+@app.get("/api/vision/events")
+def vision_events(
+    limit: int = Query(20, ge=1, le=200),
+    device_id: Optional[str] = Query(None),
+    context: Optional[str] = Query(None),
+):
+    """Return recent vision events with optional filters."""
+    store = _get_vision_store()
+    events = store.recent_events(limit=limit, device_id=device_id, context=context)
+    return {
+        "events": [e.to_dict() for e in events],
+        "total": len(events),
+    }
+
+
 # ── WebSocket push endpoint ────────────────────────────────────────────────────
 
 _active_connections: dict[str, WebSocket] = {}  # device_id → socket

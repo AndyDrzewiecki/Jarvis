@@ -91,17 +91,25 @@
 
 ---
 
-## Phase 5: Computer Vision
-*Goal: Jarvis can see and understand the physical world*
+## Phase 5: Computer Vision (COMPLETE)
+*Commit: 2026-04-15 — 1855 tests total*
 
-- Tablet cameras as vision inputs (kitchen, garage, workbench)
-- On-device or local model for object recognition
-- Use cases:
-  - Show a car part → identify, log to maintenance/inventory
-  - Show groceries → update inventory, adjust meal plan
-  - Watch cooking → track recipes, suggest timing
-  - Monitor workbench → auto-log project progress
-- Vision data feeds into Knowledge Lake with full provenance
+- `jarvis/vision/` module: `models`, `analyzer`, `store`, `router`, `pipeline`
+- **VisionAnalyzer** — calls Ollama llava/bakllava via `/api/generate` with base64 images; parses structured JSON scene descriptions; graceful fallback on parse errors or network failures
+- **VisionStore** — SQLite backend (`data/vision_events.db`) storing all vision events with full provenance (device_id, session_id, image_hash, timestamp, detected objects, routed adapters, KL IDs)
+- **VisionRouter** — keyword-based context routing:
+  - Food objects / kitchen context → `grocery` adapter (KL inventory facts)
+  - Car parts (battery, tire, filter, etc.) → `car_maintenance` (KL maintenance facts)
+  - Tools / workbench context → `project_tracking`
+  - Garage context → both `car_maintenance` + `project_tracking`
+  - Always writes a base fact to `knowledge_lake`
+- **VisionPipeline** — manages named camera sessions; accepts frames via `submit_frame()`; tracks per-session stats
+- **API endpoints:**
+  - `POST /api/vision/analyze` — single image analysis
+  - `POST /api/vision/stream` — start/stop camera sessions
+  - `GET /api/vision/events` — query stored events (filterable by device_id, context, limit)
+- 117 new tests across 6 test files; all 1855 tests pass
+- Vision model controlled by `JARVIS_VISION_MODEL` env var (default: `llava`)
 
 ---
 
@@ -231,8 +239,8 @@ This is the crown jewel — Jarvis doesn't just assist with development, it driv
 Phase 1  ████████████████████ COMPLETE
 Phase 2  ████████████████████ COMPLETE (554 tests)
 Phase 3  ████████████████████ COMPLETE (1626 tests — all 7 engines + startup harness)
-Phase 4  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Web Dashboard + Android OS
-Phase 5  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Computer Vision
+Phase 4  ████████████████████ COMPLETE (4A Web Dashboard + 4B Android Launcher)
+Phase 5  ████████████████████ COMPLETE (1855 tests — Computer Vision)
 Phase 6  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Smart Home Hub (BLE/IoT)
 Phase 7  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Network Security Agent
 Phase 8  ▓░░░░░░░░░░░░░░░░░░░ IN PROGRESS — Project Forge (Autonomous Dev)
