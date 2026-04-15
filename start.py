@@ -169,12 +169,12 @@ def main() -> None:
             if key == "api_keys" and isinstance(val, dict):
                 print("  api_keys:")
                 for k, v in val.items():
-                    marker = "✓" if v else "✗"
+                    marker = "YES" if v else "no"
                     print(f"    {k}: {marker}")
             elif key == "engine_names" and isinstance(val, list):
                 print(f"  engine_names: {val}")
             elif isinstance(val, bool):
-                print(f"  {key}: {'✓' if val else '✗'}")
+                print(f"  {key}: {'YES' if val else 'no'}")
             else:
                 print(f"  {key}: {val}")
         print()
