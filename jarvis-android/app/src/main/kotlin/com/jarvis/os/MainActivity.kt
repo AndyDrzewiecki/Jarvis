@@ -1,5 +1,10 @@
 package com.jarvis.os
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,17 +12,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.jarvis.os.chat.ChatRepository
+import com.jarvis.os.chat.ChatScreen
+import com.jarvis.os.chat.ChatViewModel
 import com.jarvis.os.device.DevicePreferences
 import com.jarvis.os.device.DeviceProfile
 import com.jarvis.os.device.KioskManager
 import com.jarvis.os.network.ChatRequest
-import com.jarvis.os.service.WebSocketService
 import com.jarvis.os.network.JarvisApiClient
 import com.jarvis.os.network.NotebookSaveRequest
+import com.jarvis.os.notification.NotificationHelper
+import com.jarvis.os.service.WebSocketService
 import com.jarvis.os.ui.*
 import com.jarvis.os.ui.theme.ArcReactorBg
 import com.jarvis.os.ui.theme.JarvisTheme
@@ -25,6 +35,7 @@ import com.jarvis.os.updater.OtaUpdater
 import com.jarvis.os.voice.TtsPlayer
 import com.jarvis.os.voice.VoiceManager
 import com.jarvis.os.voice.VoiceState
+import com.jarvis.os.voice.WakeWordService
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -34,23 +45,51 @@ class MainActivity : ComponentActivity() {
     private lateinit var voiceManager: VoiceManager
     private lateinit var ttsPlayer: TtsPlayer
     private lateinit var devicePrefs: DevicePreferences
+    private lateinit var chatViewModel: ChatViewModel
+
+    // Receives "Hey Jarvis" broadcasts from WakeWordService
+    private val wakeWordReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != WakeWordService.ACTION_WAKE_WORD_DETECTED) return
+            val command = intent.getStringExtra(WakeWordService.EXTRA_COMMAND) ?: ""
+            if (command.isNotBlank()) {
+                // Wake word came with an inline command — send it directly
+                chatViewModel.sendMessage(command)
+            } else {
+                // Just the wake word — start listening for a follow-up command
+                voiceManager.startListening()
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        NotificationHelper.createChannels(this)
 
         voiceManager = VoiceManager(this)
         ttsPlayer = TtsPlayer()
         devicePrefs = DevicePreferences(this)
 
+        // OTA check
         lifecycleScope.launch {
             val serverIp = devicePrefs.serverIp.first()
             OtaUpdater(this@MainActivity).checkAndUpdate(serverIp, BuildConfig.VERSION_CODE)
         }
 
-        // Start persistent WebSocket push listener
-        startService(Intent(this, WebSocketService::class.java))
+        // Start persistent services
+        startServiceCompat(WebSocketService::class.java)
+        startServiceCompat(WakeWordService::class.java)
 
-        // Wire kiosk mode for launcher profiles (kitchen, garage, bedroom)
+        // Register wake-word broadcast receiver
+        val filter = IntentFilter(WakeWordService.ACTION_WAKE_WORD_DETECTED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(wakeWordReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(wakeWordReceiver, filter)
+        }
+
+        // Kiosk mode for launcher profiles
         lifecycleScope.launch {
             devicePrefs.deviceProfile.collectLatest { profileName ->
                 val profile = DeviceProfile.fromName(profileName)
@@ -67,6 +106,11 @@ class MainActivity : ComponentActivity() {
                         voiceManager = voiceManager,
                         ttsPlayer = ttsPlayer,
                         devicePrefs = devicePrefs,
+                        chatViewModelFactory = { serverIp ->
+                            ChatViewModel.Factory(ChatRepository(serverIp)).also { factory ->
+                                chatViewModel = ViewModelProvider(this, factory)[ChatViewModel::class.java]
+                            }.let { chatViewModel }
+                        },
                     )
                 }
             }
@@ -75,8 +119,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(wakeWordReceiver)
         voiceManager.destroy()
         ttsPlayer.stopPlayback()
+    }
+
+    private fun startServiceCompat(clazz: Class<*>) {
+        val intent = Intent(this, clazz)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 }
 
@@ -85,6 +139,7 @@ fun JarvisApp(
     voiceManager: VoiceManager,
     ttsPlayer: TtsPlayer,
     devicePrefs: DevicePreferences,
+    chatViewModelFactory: @Composable (serverIp: String) -> ChatViewModel,
 ) {
     val navController = rememberNavController()
     val voiceState by voiceManager.state.collectAsState()
@@ -97,9 +152,13 @@ fun JarvisApp(
     val deviceName by devicePrefs.deviceName.collectAsState(initial = android.os.Build.MODEL)
     val deviceProfile by devicePrefs.deviceProfile.collectAsState(initial = DeviceProfile.DEFAULT.profileName)
 
+    // Build the ChatViewModel once we know the server IP
+    val chatViewModel = chatViewModelFactory(serverIp)
+    val chatUiState by chatViewModel.uiState.collectAsState()
+
     val scope = rememberCoroutineScope()
 
-    // Update transcript from voice state
+    // Update transcript from voice state; on final result, route to ChatViewModel
     LaunchedEffect(voiceState) {
         when (val state = voiceState) {
             is VoiceState.Partial -> transcript = state.text
@@ -108,22 +167,24 @@ fun JarvisApp(
             is VoiceState.Listening -> transcript = ""
             is VoiceState.Result -> {
                 transcript = state.text
-                // Send to Jarvis server
-                scope.launch {
-                    try {
-                        val api = JarvisApiClient.build(serverIp)
-                        val response = api.chat(ChatRequest(state.text))
-                        lastResponse = JarvisResponse(response.text, response.adapter)
-                        ttsPlayer.play(serverIp, response.text, cacheDir)
-                    } catch (e: Exception) {
-                        transcript = "Connection error: ${e.message}"
-                    }
-                }
+                chatViewModel.sendMessage(state.text)
+                // TTS is handled by observing chatUiState.messages below
+            }
+        }
+    }
+
+    // Play TTS for the latest Jarvis response
+    LaunchedEffect(chatUiState.messages) {
+        val last = chatUiState.messages.lastOrNull()
+        if (last != null && last.isJarvis && last.text.isNotBlank()) {
+            scope.launch {
+                ttsPlayer.play(serverIp, last.text, /* cacheDir placeholder */ java.io.File(""))
             }
         }
     }
 
     NavHost(navController = navController, startDestination = "home") {
+
         composable("home") {
             HomeScreen(
                 isListening = voiceState is VoiceState.Listening || voiceState is VoiceState.Partial,
@@ -149,12 +210,30 @@ fun JarvisApp(
                                 )
                             )
                         } catch (e: Exception) {
-                            // Silently fail — notebook is non-critical
+                            // Notebook save is non-critical
                         }
                     }
                 },
                 onSettingsClick = { navController.navigate("settings") },
                 onNotebookClick = { navController.navigate("notebook") },
+                onChatClick = { navController.navigate("chat") },
+            )
+        }
+
+        composable("chat") {
+            ChatScreen(
+                uiState = chatUiState,
+                isListening = voiceState is VoiceState.Listening || voiceState is VoiceState.Partial,
+                voiceTranscript = transcript,
+                onSendMessage = { chatViewModel.sendMessage(it) },
+                onVoiceButtonClick = {
+                    if (voiceState is VoiceState.Listening || voiceState is VoiceState.Partial) {
+                        voiceManager.stopListening()
+                    } else {
+                        voiceManager.startListening()
+                    }
+                },
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -168,7 +247,6 @@ fun JarvisApp(
                         devicePrefs.saveServerIp(ip)
                         devicePrefs.saveDeviceName(name)
                         devicePrefs.saveDeviceProfile(profile)
-                        // Register device with server
                         try {
                             val api = JarvisApiClient.build(ip)
                             api.registerDevice(

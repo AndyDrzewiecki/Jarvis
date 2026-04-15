@@ -1,13 +1,12 @@
 package com.jarvis.os.service
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import com.jarvis.os.device.DevicePreferences
+import com.jarvis.os.notification.NotificationHelper
 import com.jarvis.os.voice.TtsPlayer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -16,18 +15,20 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * Persistent foreground Service that maintains a WebSocket connection to the
- * Jarvis server for push notifications (spoken briefs, alerts).
+ * Persistent foreground service that maintains a WebSocket connection to the
+ * Jarvis server for real-time push messages.
  *
- * - Reconnects with exponential backoff: 2s → 4s → 8s → max 60s
- * - On {"type":"speak","text":"..."} message: calls TtsPlayer.play()
- * - Foreground notification channel "jarvis_push" keeps service alive on Android 12+
+ * Supported message types:
+ *   {"type":"speak","text":"..."}   — plays the text via TTS
+ *   {"type":"alert","title":"...","message":"..."}  — posts a visible notification
+ *   {"type":"notify","text":"..."}  — alias for alert with generic title
+ *
+ * Reconnects with exponential backoff: 2s → 4s → 8s → … → 60s max.
  */
 class WebSocketService : Service() {
 
     companion object {
         private const val TAG = "WebSocketService"
-        private const val CHANNEL_ID = "jarvis_push"
         private const val NOTIFICATION_ID = 1001
         private const val BACKOFF_BASE_MS = 2_000L
         private const val BACKOFF_MAX_MS = 60_000L
@@ -35,7 +36,7 @@ class WebSocketService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val client = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)  // keep-alive — no read timeout
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
     private lateinit var devicePrefs: DevicePreferences
@@ -47,14 +48,12 @@ class WebSocketService : Service() {
         super.onCreate()
         devicePrefs = DevicePreferences(this)
         ttsPlayer = TtsPlayer()
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+        NotificationHelper.createChannels(this)
+        startForeground(NOTIFICATION_ID, NotificationHelper.buildPushServiceNotification(this, "Connecting…"))
         scope.launch { connectLoop() }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY  // restart if killed
-    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,7 +63,7 @@ class WebSocketService : Service() {
         scope.cancel()
     }
 
-    // ── Connection loop with exponential backoff ────────────────────────────────
+    // ── Connection loop ───────────────────────────────────────────────────────
 
     private suspend fun connectLoop() {
         val serverIp = devicePrefs.serverIp.first()
@@ -74,22 +73,19 @@ class WebSocketService : Service() {
         while (scope.isActive) {
             val url = "ws://$serverIp/api/ws?device_id=$deviceId"
             Log.d(TAG, "Connecting to $url")
+
             val connected = connectOnce(url, serverIp)
             if (connected) {
-                reconnectDelayMs = BACKOFF_BASE_MS  // reset on success
+                reconnectDelayMs = BACKOFF_BASE_MS
             } else {
                 Log.w(TAG, "WebSocket disconnected. Retrying in ${reconnectDelayMs}ms.")
-                updateNotification("Reconnecting…")
+                updateStatus("Reconnecting…")
                 delay(reconnectDelayMs)
                 reconnectDelayMs = minOf(reconnectDelayMs * 2, BACKOFF_MAX_MS)
             }
         }
     }
 
-    /**
-     * Open one WebSocket connection. Suspends until disconnected.
-     * Returns true if the connection was established (even if later dropped).
-     */
     private suspend fun connectOnce(url: String, serverIp: String): Boolean {
         val connected = CompletableDeferred<Boolean>()
         val disconnected = CompletableDeferred<Unit>()
@@ -98,7 +94,7 @@ class WebSocketService : Service() {
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 currentSocket = webSocket
-                updateNotification("Connected")
+                updateStatus("Connected")
                 connected.complete(true)
             }
 
@@ -129,6 +125,8 @@ class WebSocketService : Service() {
         }
     }
 
+    // ── Message handling ──────────────────────────────────────────────────────
+
     private fun handleMessage(text: String, serverIp: String) {
         try {
             val json = JSONObject(text)
@@ -136,9 +134,27 @@ class WebSocketService : Service() {
                 "speak" -> {
                     val speakText = json.optString("text")
                     if (speakText.isNotBlank()) {
-                        ttsPlayer.play(serverIp, speakText, cacheDir)
+                        scope.launch(Dispatchers.IO) {
+                            ttsPlayer.play(serverIp, speakText, cacheDir)
+                        }
                     }
                 }
+
+                "alert" -> {
+                    val title = json.optString("title").ifBlank { "Jarvis Alert" }
+                    val message = json.optString("message").ifBlank { json.optString("text") }
+                    if (message.isNotBlank()) {
+                        NotificationHelper.postAlert(this, title, message)
+                    }
+                }
+
+                "notify" -> {
+                    val message = json.optString("text").ifBlank { json.optString("message") }
+                    if (message.isNotBlank()) {
+                        NotificationHelper.postAlert(this, "Jarvis", message)
+                    }
+                }
+
                 else -> Log.d(TAG, "Unknown WS message type: $text")
             }
         } catch (e: Exception) {
@@ -146,27 +162,10 @@ class WebSocketService : Service() {
         }
     }
 
-    // ── Notification helpers ───────────────────────────────────────────────────
+    // ── Notification helpers ──────────────────────────────────────────────────
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Jarvis Push",
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = "Jarvis real-time push notifications" }
-        getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(status: String): Notification =
-        Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Jarvis")
-            .setContentText("Jarvis — $status")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-            .build()
-
-    private fun updateNotification(status: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm?.notify(NOTIFICATION_ID, buildNotification(status))
+    private fun updateStatus(status: String) {
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID, NotificationHelper.buildPushServiceNotification(this, status))
     }
 }

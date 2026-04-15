@@ -36,6 +36,7 @@ fun HomeScreen(
     onSaveToNotebook: (String) -> Unit,
     onSettingsClick: () -> Unit,
     onNotebookClick: () -> Unit,
+    onChatClick: () -> Unit = {},
 ) {
     Box(
         modifier = Modifier
@@ -57,6 +58,9 @@ fun HomeScreen(
                 fontSize = 12.sp,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onChatClick) {
+                    Text("Chat", color = TextSecondary, fontSize = 12.sp)
+                }
                 TextButton(onClick = onNotebookClick) {
                     Text("Notebook", color = TextSecondary, fontSize = 12.sp)
                 }

@@ -7,7 +7,9 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="true"
@@ -43,6 +45,26 @@
             android:name=".service.WebSocketService"
             android:foregroundServiceType="connectedDevice"
             android:exported="false" />
+
+        <!--
+            Always-on wake-word detection service.
+            foregroundServiceType="microphone" is required on Android 14+ to use the
+            microphone from a foreground service.
+        -->
+        <service
+            android:name=".voice.WakeWordService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
+
+        <!-- Boot receiver to restart WakeWordService after device reboot -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
         <!-- Device admin receiver for kiosk (lock task) mode -->
         <receiver
