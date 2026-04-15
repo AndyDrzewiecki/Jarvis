@@ -4,6 +4,45 @@
 
 ---
 
+## Quick Start
+
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Start Ollama** (must be running):
+   ```bash
+   ollama serve
+   ollama pull gemma3:27b
+   ollama pull qwen2.5:0.5b
+   ```
+
+3. **Configure** (optional — copy and edit):
+   ```bash
+   cp .env.example .env
+   # Edit .env with your API keys, location, preferences
+   ```
+
+4. **Run Jarvis:**
+   ```bash
+   # Full server (API + specialists + engines)
+   python start.py
+
+   # CLI chat only
+   python start.py --cli
+
+   # Health check (verify Ollama, config, all 7 engines)
+   python start.py --check
+   ```
+
+5. **Access:**
+   - CLI: Interactive terminal chat
+   - API: `http://localhost:8000/api/chat`
+   - Dashboard: `http://localhost:8000/` (coming soon)
+
+---
+
 ## What It Does
 
 You talk to Jarvis in plain English. It routes your request to the right specialist, remembers context across conversations, and proactively surfaces what matters — without sending your data anywhere.
