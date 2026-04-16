@@ -1578,6 +1578,328 @@ async def sec_db_check():
     return result
 
 
+# ── Phase 8: Project Forge ─────────────────────────────────────────────────────
+
+def _get_forge_store():
+    from jarvis.forge.memory_store import ForgeMemoryStore
+    return ForgeMemoryStore()
+
+def _get_project_inventory():
+    from jarvis.forge.project_inventory import ProjectInventory
+    return ProjectInventory()
+
+
+@app.get("/api/forge/status")
+async def forge_status():
+    """Return Project Forge agent registry and memory summary."""
+    loop = asyncio.get_event_loop()
+
+    def _status():
+        store = _get_forge_store()
+        summary = store.summary()
+        from jarvis.forge.ollama_gateway import get_gateway
+        gw = get_gateway()
+        available = gw.available_models()
+        return {
+            "memory_layers": summary,
+            "available_models": available,
+            "agents": ["critic", "pattern_analyst", "tester", "code_auditor", "trainer"],
+        }
+
+    result = await loop.run_in_executor(None, _status)
+    return result
+
+
+@app.get("/api/forge/memory")
+async def forge_memory(agent: Optional[str] = None, limit: int = 50):
+    """Query the forge shared memory (recent interactions)."""
+    loop = asyncio.get_event_loop()
+
+    def _query():
+        store = _get_forge_store()
+        interactions = store.query_interactions(agent=agent, limit=limit)
+        hallucinations = store.query_hallucinations(agent=agent, limit=20)
+        patterns = store.query_meta_patterns(limit=10)
+        return {
+            "interactions": interactions,
+            "hallucinations": hallucinations,
+            "meta_patterns": patterns,
+            "summary": store.summary(),
+        }
+
+    return await loop.run_in_executor(None, _query)
+
+
+@app.get("/api/forge/memory/skills")
+async def forge_skills(agent: Optional[str] = None):
+    """Return agent skill levels from the forge memory store."""
+    loop = asyncio.get_event_loop()
+
+    def _skills():
+        store = _get_forge_store()
+        if agent:
+            return {"agent": agent, "skills": store.get_skills(agent)}
+        return {"skills": store.get_all_skills()}
+
+    return await loop.run_in_executor(None, _skills)
+
+
+@app.post("/api/forge/critic/evaluate")
+async def forge_critic_evaluate(body: dict):
+    """Evaluate an agent output with the Critic (Brain 1)."""
+    loop = asyncio.get_event_loop()
+
+    def _eval():
+        from jarvis.forge.critic import Critic
+        critic = Critic()
+        verdict = critic.evaluate(
+            interaction_id=body.get("interaction_id", "api"),
+            agent=body.get("agent", "unknown"),
+            task_type=body.get("task_type", "chat"),
+            input_text=body.get("input_text", ""),
+            output_text=body.get("output_text", ""),
+        )
+        return {
+            "quality": verdict.quality,
+            "score": verdict.score,
+            "flags": verdict.flags,
+            "reasoning": verdict.reasoning,
+            "hallucination_ids": verdict.hallucination_ids,
+        }
+
+    return await loop.run_in_executor(None, _eval)
+
+
+@app.post("/api/forge/analyst/analyze")
+async def forge_analyst_analyze(body: dict):
+    """Run pattern analysis for an agent (Brain 2)."""
+    loop = asyncio.get_event_loop()
+
+    def _analyze():
+        from jarvis.forge.pattern_analyst import PatternAnalyst
+        analyst = PatternAnalyst()
+        agent_name = body.get("agent", "")
+        if not agent_name:
+            return {"error": "Missing 'agent' field"}
+        report = analyst.analyze(agent=agent_name, window=body.get("window", 200))
+        return {
+            "agent": report.agent,
+            "interactions_reviewed": report.interactions_reviewed,
+            "poor_count": report.poor_count,
+            "flag_distribution": report.flag_distribution,
+            "patterns_identified": report.patterns_identified,
+            "proposals_staged": report.proposals_staged,
+            "top_flag": report.top_flag,
+        }
+
+    return await loop.run_in_executor(None, _analyze)
+
+
+@app.post("/api/forge/tester/run")
+async def forge_tester_run(body: dict):
+    """Run A/B test for a staged prompt fix (Brain 3)."""
+    loop = asyncio.get_event_loop()
+
+    def _test():
+        from jarvis.forge.tester import AgentTester
+        tester = AgentTester()
+        agent_name = body.get("agent", "")
+        if not agent_name:
+            return {"error": "Missing 'agent' field"}
+        report = tester.test_staged(
+            agent=agent_name,
+            n_runs=body.get("n_runs", 5),
+        )
+        if report is None:
+            return {"message": "No staged version found", "agent": agent_name}
+        return {
+            "agent": report.agent,
+            "decision": report.decision,
+            "improvement": report.improvement,
+            "runs": report.runs,
+            "mean_score_a": report.mean_score_a,
+            "mean_score_b": report.mean_score_b,
+            "reason": report.reason,
+        }
+
+    return await loop.run_in_executor(None, _test)
+
+
+@app.post("/api/forge/auditor/audit")
+async def forge_auditor_audit(body: dict):
+    """Audit a code or prompt change (Brain 4)."""
+    loop = asyncio.get_event_loop()
+
+    def _audit():
+        from jarvis.forge.code_auditor import CodeAuditor
+        auditor = CodeAuditor()
+        verdict = auditor.audit(
+            change_id=body.get("change_id", "api"),
+            change_type=body.get("change_type", "code"),
+            component=body.get("component", "unknown"),
+            before=body.get("before", ""),
+            after=body.get("after", ""),
+        )
+        return {
+            "verdict": verdict.verdict,
+            "risk_level": verdict.risk_level,
+            "issues": verdict.issues,
+            "suggestions": verdict.suggestions,
+            "static_flags": verdict.static_flags,
+            "reasoning": verdict.reasoning,
+        }
+
+    return await loop.run_in_executor(None, _audit)
+
+
+@app.post("/api/forge/trainer/review")
+async def forge_trainer_review(body: dict):
+    """Run trainer review cycle for an agent."""
+    loop = asyncio.get_event_loop()
+
+    def _review():
+        from jarvis.forge.trainer import AgentTrainer
+        trainer = AgentTrainer()
+        agent_name = body.get("agent", "")
+        if not agent_name:
+            return {"error": "Missing 'agent' field"}
+        report = trainer.review(agent=agent_name, min_interactions=body.get("min_interactions", 5))
+        return {
+            "agent": report.agent,
+            "interactions_reviewed": report.interactions_reviewed,
+            "good_count": report.good_count,
+            "poor_count": report.poor_count,
+            "skills_updated": report.skills_updated,
+            "new_prompt_version": report.new_prompt_version,
+            "patterns_found": report.patterns_found,
+            "training_pairs_available": report.training_pairs_available,
+        }
+
+    return await loop.run_in_executor(None, _review)
+
+
+@app.get("/api/forge/trainer/export")
+async def forge_trainer_export(
+    agent: Optional[str] = None,
+    format: str = "sharegpt",
+):
+    """Export training pairs (ShareGPT or DPO format)."""
+    loop = asyncio.get_event_loop()
+
+    def _export():
+        from jarvis.forge.trainer import AgentTrainer
+        trainer = AgentTrainer()
+        return trainer.export_training_pairs(agent=agent, format=format)
+
+    pairs = await loop.run_in_executor(None, _export)
+    return {"format": format, "count": len(pairs), "pairs": pairs}
+
+
+@app.get("/api/forge/projects")
+async def forge_projects(status: Optional[str] = None):
+    """Return all known projects from the inventory."""
+    loop = asyncio.get_event_loop()
+
+    def _list():
+        inv = _get_project_inventory()
+        projects = inv.get_projects(status=status)
+        return {
+            "projects": [
+                {
+                    "name": p.name,
+                    "path": p.path,
+                    "language": p.language,
+                    "framework": p.framework,
+                    "status": p.status,
+                    "test_count": p.test_count,
+                    "tech_stack": p.tech_stack,
+                    "description": p.description,
+                    "active_task_count": sum(
+                        1 for t in p.tasks if t.get("status") == "pending"
+                    ),
+                }
+                for p in projects
+            ],
+            "total": len(projects),
+        }
+
+    return await loop.run_in_executor(None, _list)
+
+
+@app.post("/api/forge/projects/scan")
+async def forge_projects_scan():
+    """Trigger a fresh scan of all project directories."""
+    loop = asyncio.get_event_loop()
+
+    def _scan():
+        inv = _get_project_inventory()
+        summary = inv.scan()
+        return {
+            "projects_found": summary.projects_found,
+            "projects_updated": summary.projects_updated,
+            "total_tasks": summary.total_tasks,
+            "insights": summary.insights,
+            "scan_duration_ms": summary.scan_duration_ms,
+            "scan_roots": summary.scan_roots,
+        }
+
+    return await loop.run_in_executor(None, _scan)
+
+
+@app.get("/api/forge/projects/insights")
+async def forge_project_insights():
+    """Return cross-project insights."""
+    loop = asyncio.get_event_loop()
+
+    def _insights():
+        inv = _get_project_inventory()
+        return {"insights": inv.cross_insights()}
+
+    return await loop.run_in_executor(None, _insights)
+
+
+@app.post("/api/forge/design/brainstorm")
+async def forge_design_brainstorm(body: dict):
+    """Start a design session: brainstorm an idea into a project spec."""
+    loop = asyncio.get_event_loop()
+
+    def _brainstorm():
+        from jarvis.forge.design_session import DesignSession
+        session = DesignSession()
+        idea = body.get("idea", "")
+        if not idea:
+            return {"error": "Missing 'idea' field"}
+        answers = body.get("answers")  # optional list of pre-supplied answers
+        spec = session.brainstorm(idea, answers=answers)
+        return {
+            "session_id": spec.session_id,
+            "project_name": spec.project_name,
+            "summary": spec.summary,
+            "must_have": spec.must_have,
+            "nice_to_have": spec.nice_to_have,
+            "tech_stack": spec.tech_stack,
+            "estimated_complexity": spec.estimated_complexity,
+        }
+
+    return await loop.run_in_executor(None, _brainstorm)
+
+
+@app.get("/api/forge/gateway/health")
+async def forge_gateway_health():
+    """Check health of all Ollama models used by Forge agents."""
+    loop = asyncio.get_event_loop()
+
+    def _health():
+        from jarvis.forge.ollama_gateway import get_gateway
+        gw = get_gateway()
+        return {
+            "models": gw.health_report(),
+            "available_models": gw.available_models(),
+        }
+
+    return await loop.run_in_executor(None, _health)
+
+
 if __name__ == "__main__":
     import uvicorn
     _host = os.getenv("JARVIS_HOST", "0.0.0.0")

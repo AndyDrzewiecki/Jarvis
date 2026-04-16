@@ -174,7 +174,18 @@
 
 ---
 
-## Phase 8: Project Forge — Autonomous Software Development
+## Phase 8: Project Forge — Autonomous Software Development (COMPLETE)
+*Commit: 2026-04-15 — 2439 tests total*
+
+**Production modules:**
+- `jarvis/forge/ollama_gateway.py` — OllamaGateway: per-agent model selection, health checks, fallback chains (FORGE_MODEL_LARGE/MEDIUM/SMALL env vars)
+- `jarvis/forge/pattern_analyst.py` — Brain 2: reads interaction history, clusters failures by flag type, stages fix proposals to prompt_versions
+- `jarvis/forge/tester.py` — Brain 3: A/B tests staged fixes (FORGE_PROMOTION_THRESHOLD=0.05), promotes or discards
+- `jarvis/forge/code_auditor.py` — Brain 4: static security scan (eval/exec/pickle/shell=True) + LLM audit; escalates critical flags
+- `jarvis/forge/design_session.py` — DesignSession CLI: brainstorm → ProjectSpec → phased Roadmap → autonomous execute; `python -m jarvis.forge.design_session`
+- `jarvis/forge/project_inventory.py` — ProjectInventory: scans D:/AI-Lab + C:/AI-Lab, detects language/framework, counts tests, extracts ROADMAP tasks, generates cross-project insights
+- 16 new `/api/forge/*` endpoints: status, memory, skills, critic/evaluate, analyst/analyze, tester/run, auditor/audit, trainer/review+export, projects/list+scan+insights, design/brainstorm, gateway/health
+
 *Goal: Jarvis becomes a self-improving software development platform*
 
 This is the crown jewel — Jarvis doesn't just assist with development, it drives it autonomously using local models on the homelab.
@@ -220,7 +231,16 @@ This is the crown jewel — Jarvis doesn't just assist with development, it driv
 
 ---
 
-## Phase 9: Model Training Pipeline
+## Phase 9: Model Training Pipeline (COMPLETE)
+*Commit: 2026-04-15 — 2439 tests total*
+
+**Production modules:**
+- `jarvis/forge/training_exporter.py` — TrainingExporter: exports correction pairs + high-quality interactions in ShareGPT / DPO / Alpaca formats; bitemporal metadata (`valid_from`/`known_from`) on every record
+- `jarvis/forge/lora_runner.py` — LoraRunner: create/configure/launch/monitor QLoRA jobs; supports axolotl, llama.cpp, unsloth, mlx-lm backends; publishes adapters to Ollama via Modelfile; job state in `data/lora_jobs.db`
+- `jarvis/forge/bitemporal_store.py` — BitemporalStore: full two-axis temporal store (`valid_from/valid_to` + `known_from/known_to`); `query_as_of()` enables exact-point backtesting; `supersede()` atomically expires old facts and records new ones
+- `jarvis/forge/federation.py` — FederationManager: generates Litestream YAML config, restore script, systemd unit, and env file for all 9 Jarvis SQLite databases across the homelab (EliteBook .28, Mini PC .27, EVO-X2 .20/.21)
+- `jarvis/forge/improvement_scheduler.py` — ImprovementScheduler: daily (trainer+analyst+tester), weekly (export+threshold check), monthly (LoRA launch) self-improvement cycles; persists schedule state; `run_due()` called by Jarvis scheduler
+
 *Goal: Jarvis trains its own household-specific models*
 
 - 12-18 months of engine data accumulation
@@ -256,7 +276,7 @@ Phase 3  ████████████████████ COMPLETE (
 Phase 4  ████████████████████ COMPLETE (4A Web Dashboard + 4B Android Launcher)
 Phase 5  ████████████████████ COMPLETE (1855 tests — Computer Vision)
 Phase 6  ████████████████████ COMPLETE (2091 tests — Smart Home Hub)
-Phase 7  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Network Security Agent
-Phase 8  ▓░░░░░░░░░░░░░░░░░░░ IN PROGRESS — Project Forge (Autonomous Dev)
-Phase 9  ░░░░░░░░░░░░░░░░░░░░ PLANNED — Model Training Pipeline
+Phase 7  ████████████████████ COMPLETE (2312 tests — Network Security Agent)
+Phase 8  ████████████████████ COMPLETE (2439 tests — Project Forge: 5 brains, design CLI, project inventory)
+Phase 9  ████████████████████ COMPLETE (2439 tests — Model Training Pipeline: LoRA runner, bitemporal store, federation, scheduler)
 ```
