@@ -75,6 +75,16 @@ LOCAL_FEEDS: list[str] = [u.strip() for u in os.getenv("JARVIS_LOCAL_FEEDS", "")
 NPS_API_KEY      = os.getenv("JARVIS_NPS_API_KEY", "")
 
 
+# ── Phase 7: Network Security Agent ──────────────────────────────────────────
+FIREWALLA_URL   = os.getenv("JARVIS_FIREWALLA_URL", "")
+FIREWALLA_TOKEN = os.getenv("JARVIS_FIREWALLA_TOKEN", "")
+ARUBA_URL       = os.getenv("JARVIS_ARUBA_URL", "")
+ARUBA_USER      = os.getenv("JARVIS_ARUBA_USER", "admin")
+ARUBA_PASS      = os.getenv("JARVIS_ARUBA_PASS", "")
+SECURITY_AUTO_BLOCK   = os.getenv("JARVIS_SECURITY_AUTO_BLOCK",   "true").lower() in ("true", "1", "yes")
+SECURITY_AUTO_ISOLATE = os.getenv("JARVIS_SECURITY_AUTO_ISOLATE", "true").lower() in ("true", "1", "yes")
+SECURITY_AUDIT_RETAIN_DAYS = int(os.getenv("JARVIS_SECURITY_AUDIT_RETAIN", "90"))
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 def get(key: str, default: Any = None) -> Any:
     """Read a config value by name. Allows runtime override in tests."""

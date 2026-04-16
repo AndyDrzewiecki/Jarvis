@@ -1190,6 +1190,394 @@ def sh_delete_scene(scene_name: str):
     return {"deleted": scene_name}
 
 
+# ── Phase 7: Network Security Agent endpoints ─────────────────────────────────
+#
+# GET  /api/security/dashboard         → summary stats
+# GET  /api/security/devices           → network device inventory
+# POST /api/security/scan              → trigger discovery from Firewalla+Aruba
+# GET  /api/security/threats           → active threat events
+# POST /api/security/threats/{id}/resolve → resolve a threat event
+# GET  /api/security/traffic           → recent traffic flows from Firewalla
+# GET  /api/security/anomalies         → anomaly alerts
+# POST /api/security/anomalies/{id}/resolve → resolve anomaly
+# GET  /api/security/blocks            → active block list
+# POST /api/security/block             → block an IP or domain
+# DELETE /api/security/block/{target}  → unblock
+# GET  /api/security/isolations        → active device isolations
+# POST /api/security/isolate/{mac}     → quarantine a device
+# POST /api/security/release/{mac}     → release device from quarantine
+# GET  /api/security/rules             → Firewalla firewall rules
+# GET  /api/security/guest             → active guest Wi-Fi sessions
+# POST /api/security/guest/expire      → expire all guest sessions
+# POST /api/security/guest/register    → register a guest session
+# GET  /api/security/audit             → audit log
+# GET  /api/security/rogue-aps         → rogue AP detections from Aruba
+# GET  /api/security/aps               → Aruba AP inventory
+# POST /api/security/db/check          → run DB integrity + permission checks
+
+class _SecBlockReq(BaseModel):
+    target: str
+    target_type: str = "ip"
+    reason: str = ""
+    ttl_hours: Optional[int] = None
+
+
+class _SecGuestReq(BaseModel):
+    mac_address: str
+    ip_address: str
+    hostname: str = ""
+    bandwidth_limit_mbps: Optional[float] = None
+    ttl_hours: int = 24
+
+
+class _SecIsolateReq(BaseModel):
+    device_id: str = ""
+    ip_address: str = ""
+    original_vlan: str = "main"
+    reason: str = ""
+
+
+def _get_inventory():
+    from jarvis.security.device_inventory import DeviceInventory
+    return DeviceInventory()
+
+
+def _get_defense():
+    from jarvis.security.active_defense import ActiveDefense
+    return ActiveDefense()
+
+
+def _get_threat_engine():
+    from jarvis.security.threat_engine import ThreatEngine
+    return ThreatEngine()
+
+
+def _get_anomaly_detector():
+    from jarvis.security.anomaly_detector import AnomalyDetector
+    return AnomalyDetector()
+
+
+def _get_firewalla():
+    from jarvis.security.firewalla_client import FirewallaClient
+    return FirewallaClient()
+
+
+def _get_aruba():
+    from jarvis.security.aruba_client import ArubaClient
+    return ArubaClient()
+
+
+def _get_audit_logger():
+    from jarvis.security.db_protection import AuditLogger
+    return AuditLogger()
+
+
+@app.get("/api/security/dashboard")
+def sec_dashboard():
+    """Security overview: device counts, threat summary, recent alerts."""
+    inventory = _get_inventory()
+    threat_engine = _get_threat_engine()
+    anomaly_detector = _get_anomaly_detector()
+    defense = _get_defense()
+
+    device_counts = inventory.count()
+    threat_counts = threat_engine.count_by_level()
+    anomaly_count = anomaly_detector.count_unresolved()
+    active_blocks = len(defense.get_blocks(active_only=True))
+    active_isolations = len(defense.get_isolations(active_only=True))
+
+    return {
+        "devices": device_counts,
+        "threats": {
+            "by_level": threat_counts,
+            "total_active": sum(threat_counts.values()),
+        },
+        "anomalies": {"unresolved": anomaly_count},
+        "defense": {
+            "active_blocks": active_blocks,
+            "active_isolations": active_isolations,
+        },
+        "firewalla_configured": _get_firewalla().configured,
+        "aruba_configured": _get_aruba().configured,
+    }
+
+
+@app.get("/api/security/devices")
+def sec_list_devices(
+    online_only: bool = Query(False),
+    vlan: Optional[str] = Query(None),
+    device_type: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return network device inventory."""
+    from fastapi import HTTPException
+    from jarvis.security.models import VLANType, NetworkDeviceType
+    vlan_enum = None
+    if vlan:
+        try:
+            vlan_enum = VLANType(vlan)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid vlan: {vlan!r}")
+    dtype_enum = None
+    if device_type:
+        try:
+            dtype_enum = NetworkDeviceType(device_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid device_type: {device_type!r}")
+
+    inventory = _get_inventory()
+    devices = inventory.get_all(online_only=online_only, vlan=vlan_enum, device_type=dtype_enum, limit=limit)
+    return {"devices": [d.to_dict() for d in devices], "total": len(devices)}
+
+
+@app.post("/api/security/scan")
+async def sec_scan():
+    """Trigger a device discovery scan from Firewalla and Aruba."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _do_scan():
+        fw = _get_firewalla()
+        aruba = _get_aruba()
+        inventory = _get_inventory()
+        fw_count = aruba_count = 0
+        if fw.configured:
+            fw_devices = fw.get_devices()
+            fw_count = inventory.merge_firewalla_devices(fw_devices)
+        if aruba.configured:
+            aruba_clients = aruba.get_clients()
+            aruba_count = inventory.merge_aruba_clients(aruba_clients)
+        return {"firewalla_devices": fw_count, "aruba_clients": aruba_count}
+
+    result = await loop.run_in_executor(None, _do_scan)
+    _get_audit_logger().log(actor="api", action="security_scan",
+                            detail=f"fw={result['firewalla_devices']} aruba={result['aruba_clients']}")
+    return result
+
+
+@app.get("/api/security/threats")
+def sec_threats(
+    unresolved_only: bool = Query(True),
+    level: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Return threat events with optional filters."""
+    from fastapi import HTTPException
+    from jarvis.security.models import ThreatLevel
+    level_enum = None
+    if level:
+        try:
+            level_enum = ThreatLevel(level)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid level: {level!r}")
+    events = _get_threat_engine().get_events(unresolved_only=unresolved_only, level=level_enum, limit=limit)
+    return {"threats": [e.to_dict() for e in events], "total": len(events)}
+
+
+@app.post("/api/security/threats/{event_id}/resolve")
+def sec_resolve_threat(event_id: str):
+    """Mark a threat event as resolved."""
+    from fastapi import HTTPException
+    ok = _get_threat_engine().resolve_event(event_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Threat event not found")
+    _get_audit_logger().log(actor="api", action="resolve_threat", target=event_id)
+    return {"resolved": event_id}
+
+
+@app.get("/api/security/traffic")
+async def sec_traffic(
+    hours: int = Query(1, ge=1, le=24),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Return recent traffic flows from Firewalla."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    flows = await loop.run_in_executor(None, lambda: _get_firewalla().get_flows(limit=limit, hours=hours))
+    return {"flows": flows, "total": len(flows)}
+
+
+@app.get("/api/security/anomalies")
+def sec_anomalies(
+    unresolved_only: bool = Query(True),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Return anomaly alerts."""
+    alerts = _get_anomaly_detector().get_alerts(unresolved_only=unresolved_only, limit=limit)
+    return {"anomalies": [a.to_dict() for a in alerts], "total": len(alerts)}
+
+
+@app.post("/api/security/anomalies/{alert_id}/resolve")
+def sec_resolve_anomaly(alert_id: str):
+    from fastapi import HTTPException
+    ok = _get_anomaly_detector().resolve_alert(alert_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Anomaly alert not found")
+    _get_audit_logger().log(actor="api", action="resolve_anomaly", target=alert_id)
+    return {"resolved": alert_id}
+
+
+@app.get("/api/security/blocks")
+def sec_blocks():
+    """Return all active IP/domain blocks."""
+    blocks = _get_defense().get_blocks(active_only=True)
+    return {"blocks": [b.to_dict() for b in blocks], "total": len(blocks)}
+
+
+@app.post("/api/security/block", status_code=201)
+def sec_block(req: _SecBlockReq):
+    """Block an IP address or domain."""
+    entry = _get_defense().block(
+        target=req.target,
+        target_type=req.target_type,
+        reason=req.reason,
+        ttl_hours=req.ttl_hours,
+    )
+    _get_audit_logger().log(actor="api", action="block", target=req.target,
+                            detail=f"type={req.target_type}")
+    return entry.to_dict()
+
+
+@app.delete("/api/security/block/{target}")
+def sec_unblock(target: str):
+    """Remove a block on an IP or domain."""
+    from fastapi import HTTPException
+    ok = _get_defense().unblock(target)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"No active block found for {target!r}")
+    _get_audit_logger().log(actor="api", action="unblock", target=target)
+    return {"unblocked": target}
+
+
+@app.get("/api/security/isolations")
+def sec_isolations():
+    """Return active device isolations."""
+    isos = _get_defense().get_isolations(active_only=True)
+    return {"isolations": [i.to_dict() for i in isos], "total": len(isos)}
+
+
+@app.post("/api/security/isolate/{mac}", status_code=201)
+def sec_isolate(mac: str, req: _SecIsolateReq):
+    """Move a device to quarantine VLAN."""
+    from fastapi import HTTPException
+    from jarvis.security.models import VLANType
+    try:
+        original_vlan = VLANType(req.original_vlan)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid original_vlan: {req.original_vlan!r}")
+    iso = _get_defense().isolate_device(
+        device_id=req.device_id,
+        mac=mac,
+        ip=req.ip_address,
+        original_vlan=original_vlan,
+        reason=req.reason,
+    )
+    return iso.to_dict()
+
+
+@app.post("/api/security/release/{mac}")
+def sec_release(mac: str):
+    """Release a device from quarantine."""
+    from fastapi import HTTPException
+    ok = _get_defense().release_device(mac)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"No active isolation found for {mac!r}")
+    _get_audit_logger().log(actor="api", action="release_device", target=mac)
+    return {"released": mac}
+
+
+@app.get("/api/security/rules")
+async def sec_rules():
+    """Return current Firewalla firewall rules."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    rules = await loop.run_in_executor(None, _get_firewalla().get_rules)
+    return {"rules": rules, "total": len(rules)}
+
+
+@app.get("/api/security/guest")
+def sec_guest():
+    """Return active guest Wi-Fi sessions."""
+    sessions = _get_defense().get_guest_sessions(active_only=True)
+    return {"sessions": [s.to_dict() for s in sessions], "total": len(sessions)}
+
+
+@app.post("/api/security/guest/register", status_code=201)
+def sec_guest_register(req: _SecGuestReq):
+    """Register a new guest Wi-Fi session."""
+    session = _get_defense().register_guest(
+        mac=req.mac_address,
+        ip=req.ip_address,
+        hostname=req.hostname,
+        bandwidth_limit_mbps=req.bandwidth_limit_mbps,
+        ttl_hours=req.ttl_hours,
+    )
+    return session.to_dict()
+
+
+@app.post("/api/security/guest/expire")
+def sec_guest_expire():
+    """Expire all active guest sessions."""
+    count = _get_defense().expire_all_guests()
+    _get_audit_logger().log(actor="api", action="expire_guests", detail=f"{count} sessions")
+    return {"expired": count}
+
+
+@app.get("/api/security/audit")
+def sec_audit(
+    actor: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Return audit log entries."""
+    entries = _get_audit_logger().query(actor=actor, action=action, limit=limit)
+    return {"entries": [e.to_dict() for e in entries], "total": len(entries)}
+
+
+@app.get("/api/security/rogue-aps")
+async def sec_rogue_aps():
+    """Return rogue AP detections from Aruba."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    rogues = await loop.run_in_executor(None, _get_aruba().get_rogue_aps)
+    return {"rogue_aps": rogues, "total": len(rogues)}
+
+
+@app.get("/api/security/aps")
+async def sec_aps():
+    """Return Aruba AP inventory."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    aps = await loop.run_in_executor(None, _get_aruba().get_aps)
+    return {"access_points": aps, "total": len(aps)}
+
+
+@app.post("/api/security/db/check")
+async def sec_db_check():
+    """Run database integrity and permission checks."""
+    import asyncio
+    from jarvis.security.db_protection import SecurityScanner
+    loop = asyncio.get_event_loop()
+
+    def _check():
+        scanner = SecurityScanner()
+        from jarvis import config
+        return {
+            "db_sizes": scanner.get_db_sizes(),
+            "permission_issues": scanner.check_jarvis_db_permissions(),
+            "integrity": {
+                "memory":    scanner.integrity_check(config.MEMORY_DB_PATH),
+                "decisions": scanner.integrity_check(config.DECISIONS_DB_PATH),
+                "episodes":  scanner.integrity_check(config.EPISODES_DB_PATH),
+                "semantic":  scanner.integrity_check(config.SEMANTIC_DB_PATH),
+            },
+        }
+
+    result = await loop.run_in_executor(None, _check)
+    _get_audit_logger().log(actor="api", action="db_check")
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
     _host = os.getenv("JARVIS_HOST", "0.0.0.0")
